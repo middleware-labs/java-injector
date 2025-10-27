@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/naman47vyas/mw-injector/pkg/discovery/internal"
+	"github.com/middleware-labs/java-injector/pkg/discovery/internal"
 )
 
 func TestParseCommandLine(t *testing.T) {
