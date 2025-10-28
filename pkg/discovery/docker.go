@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -317,9 +318,7 @@ func (dd *DockerDiscoverer) parseMounts(container *DockerContainer, mounts []int
 	}
 }
 
-// detectDockerCompose detects if container is managed by Docker Compose
 func (dd *DockerDiscoverer) detectDockerCompose(container *DockerContainer) {
-	// Check for Docker Compose labels
 	if project, ok := container.Labels["com.docker.compose.project"]; ok {
 		container.IsCompose = true
 		container.ComposeProject = project
@@ -331,8 +330,22 @@ func (dd *DockerDiscoverer) detectDockerCompose(container *DockerContainer) {
 
 	if workdir, ok := container.Labels["com.docker.compose.project.working_dir"]; ok {
 		container.ComposeWorkDir = workdir
-		// Compose file is typically in the working directory
-		container.ComposeFile = filepath.Join(workdir, "docker-compose.yml")
+
+		// Search for compose file with multiple possible names
+		possibleFiles := []string{
+			"docker-compose.yml",
+			"docker-compose.yaml",
+			"compose.yml",
+			"compose.yaml",
+		}
+
+		for _, filename := range possibleFiles {
+			fullPath := filepath.Join(workdir, filename)
+			if _, err := os.Stat(fullPath); err == nil {
+				container.ComposeFile = fullPath
+				break
+			}
+		}
 	}
 }
 

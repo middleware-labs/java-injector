@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/config"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -42,6 +44,56 @@ func NewDockerOperations(ctx context.Context, hostAgentPath string) *DockerOpera
 type InstrumentedState struct {
 	Containers map[string]ContainerState `json:"containers"`
 	UpdatedAt  time.Time                 `json:"updated_at"`
+}
+
+type ComposeFile struct {
+	Version  string             `yaml:"version,omitempty"`
+	Services map[string]Service `yaml:"services"`
+	Networks map[string]Network `yaml:"networks,omitempty"`
+	Volumes  map[string]Volume  `yaml:"volumes,omitempty"`
+}
+
+// Service represents a service in docker-compose
+type Service struct {
+	Build       interface{} `yaml:"build,omitempty"`
+	Image       string      `yaml:"image,omitempty"`
+	Ports       []string    `yaml:"ports,omitempty"`
+	Environment []string    `yaml:"environment,omitempty"`
+	Volumes     []string    `yaml:"volumes,omitempty"`
+	Networks    []string    `yaml:"networks,omitempty"`
+	Restart     string      `yaml:"restart,omitempty"`
+	DependsOn   []string    `yaml:"depends_on,omitempty"`
+	Command     interface{} `yaml:"command,omitempty"`
+	Entrypoint  interface{} `yaml:"entrypoint,omitempty"`
+	WorkingDir  string      `yaml:"working_dir,omitempty"`
+	User        string      `yaml:"user,omitempty"`
+
+	// Keep raw YAML for fields we don't explicitly handle
+	Extra map[string]interface{} `yaml:",inline"`
+}
+
+// Network represents a network definition
+type Network struct {
+	Driver string                 `yaml:"driver,omitempty"`
+	Extra  map[string]interface{} `yaml:",inline"`
+}
+
+// Volume represents a volume definition
+type Volume struct {
+	Driver string                 `yaml:"driver,omitempty"`
+	Extra  map[string]interface{} `yaml:",inline"`
+}
+
+// ComposeModifier handles Docker Compose file modifications
+type ComposeModifier struct {
+	filePath string
+}
+
+// NewComposeModifier creates a new compose file modifier
+func NewComposeModifier(filePath string) *ComposeModifier {
+	return &ComposeModifier{
+		filePath: filePath,
+	}
 }
 
 // ContainerState stores information about an instrumented container
@@ -246,7 +298,7 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	return strings.Join(cmdParts, " ")
 }
 
-// instrumentComposeContainer instruments a Docker Compose-managed container
+// Updated instrumentComposeContainer method to use the new YAML modifier
 func (do *DockerOperations) instrumentComposeContainer(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
 	fmt.Printf("🔧 Instrumenting Docker Compose container: %s\n", container.ContainerName)
 
@@ -254,27 +306,60 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 		return fmt.Errorf("compose file not found for container %s", container.ContainerName)
 	}
 
-	// Step 1: Backup original compose file
-	backupFile := container.ComposeFile + ".backup"
-	if err := do.copyFile(container.ComposeFile, backupFile); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not backup compose file: %v\n", err)
+	modifier := NewComposeModifier(container.ComposeFile)
+
+	// Step 1: Validate compose file
+	if err := modifier.ValidateComposeFile(); err != nil {
+		return fmt.Errorf("invalid compose file: %w", err)
 	}
 
-	// Step 2: Modify compose file
+	// Step 2: Create backup
+	backupPath, err := modifier.BackupComposeFile()
+	if err != nil {
+		fmt.Printf("   ⚠️  Warning: Could not backup compose file: %v\n", err)
+		backupPath = "" // Continue without backup
+	} else {
+		fmt.Printf("   ✅ Backup created: %s\n", filepath.Base(backupPath))
+	}
+
+	// Step 3: Modify compose file
 	if err := do.modifyComposeFile(container, cfg); err != nil {
+		// Restore backup on failure if we have one
+		if backupPath != "" {
+			modifier.RestoreFromBackup(backupPath)
+		}
 		return fmt.Errorf("failed to modify compose file: %w", err)
 	}
-	fmt.Println("   ✅ Compose file updated")
 
-	// Step 3: Recreate service using docker-compose
+	// Step 4: Validate modified file
+	if err := modifier.ValidateComposeFile(); err != nil {
+		// Restore backup on validation failure
+		if backupPath != "" {
+			modifier.RestoreFromBackup(backupPath)
+		}
+		return fmt.Errorf("modified compose file is invalid: %w", err)
+	}
+
+	// Step 5: Recreate service using docker-compose
 	fmt.Println("   🔄 Recreating service...")
 	if err := do.recreateComposeService(container); err != nil {
 		// Restore backup on failure
-		do.copyFile(backupFile, container.ComposeFile)
+		if backupPath != "" {
+			modifier.RestoreFromBackup(backupPath)
+			fmt.Println("   🔙 Restored original compose file due to recreation failure")
+		}
 		return fmt.Errorf("failed to recreate service: %w", err)
 	}
 
-	// Step 4: Save state
+	// Step 6: Verify instrumentation worked
+	if err := do.verifyContainerInstrumentation(container.ContainerName); err != nil {
+		fmt.Printf("   ⚠️  Warning: Instrumentation verification failed: %v\n", err)
+		fmt.Println("   🔍 Check container logs for issues")
+	} else {
+		fmt.Println("   ✅ Instrumentation verified")
+	}
+
+	// Step 7: Save state
 	if err := do.saveContainerState(container, cfg); err != nil {
 		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
 	}
@@ -664,56 +749,297 @@ func (do *DockerOperations) runContainer(command string) error {
 	return cmd.Run()
 }
 
+// // modifyComposeFile modifies a docker-compose.yml file to add instrumentation
+// func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
+// 	// Read compose file
+// 	content, err := os.ReadFile(container.ComposeFile)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// For now, we'll do simple string manipulation
+// 	// In production, you'd want to use a YAML parser
+// 	newContent := string(content)
+
+// 	// Find the service section
+// 	serviceName := container.ComposeService
+// 	servicePattern := fmt.Sprintf("  %s:", serviceName)
+
+// 	if !strings.Contains(newContent, servicePattern) {
+// 		return fmt.Errorf("service %s not found in compose file", serviceName)
+// 	}
+
+// 	// Build environment additions
+// 	envAdditions := ""
+// 	mwEnv := cfg.ToEnvironmentVariables()
+
+// 	envAdditions += "      - JAVA_TOOL_OPTIONS=-javaagent:" + DefaultContainerAgentPath + "\n"
+// 	for k, v := range mwEnv {
+// 		envAdditions += fmt.Sprintf("      - %s=%s\n", k, v)
+// 	}
+
+// 	// Add volume for agent
+// 	volumeAddition := fmt.Sprintf("      - %s:%s:ro\n", do.hostAgentPath, DefaultContainerAgentPath)
+
+// 	// Insert additions (this is simplified - production code should use YAML parser)
+// 	fmt.Println("   ⚠️  Compose file modification requires manual intervention")
+// 	fmt.Println("   💡 Add the following to your docker-compose.yml:")
+// 	fmt.Println("\n   Environment variables:")
+// 	fmt.Println(envAdditions)
+// 	fmt.Println("   Volume mount:")
+// 	fmt.Println(volumeAddition)
+
+// 	return nil
+// }
+
 // modifyComposeFile modifies a docker-compose.yml file to add instrumentation
 func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
-	// Read compose file
-	content, err := os.ReadFile(container.ComposeFile)
+	modifier := NewComposeModifier(container.ComposeFile)
+
+	// Parse the compose file
+	composeData, err := modifier.Parse()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse compose file: %w", err)
 	}
 
-	// For now, we'll do simple string manipulation
-	// In production, you'd want to use a YAML parser
-	newContent := string(content)
-
-	// Find the service section
-	serviceName := container.ComposeService
-	servicePattern := fmt.Sprintf("  %s:", serviceName)
-
-	if !strings.Contains(newContent, servicePattern) {
-		return fmt.Errorf("service %s not found in compose file", serviceName)
+	// Check if service exists
+	service, exists := composeData.Services[container.ComposeService]
+	if !exists {
+		return fmt.Errorf("service '%s' not found in compose file", container.ComposeService)
 	}
 
-	// Build environment additions
-	envAdditions := ""
-	mwEnv := cfg.ToEnvironmentVariables()
+	// Check if already instrumented
+	if modifier.isServiceInstrumented(&service) {
+		fmt.Printf("   ⚠️  Service '%s' appears to already be instrumented\n", container.ComposeService)
+		fmt.Print("   Continue with instrumentation? [y/N]: ")
 
-	envAdditions += "      - JAVA_TOOL_OPTIONS=-javaagent:" + DefaultContainerAgentPath + "\n"
-	for k, v := range mwEnv {
-		envAdditions += fmt.Sprintf("      - %s=%s\n", k, v)
+		var response string
+		fmt.Scanln(&response)
+		if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+			return fmt.Errorf("instrumentation cancelled by user")
+		}
 	}
 
-	// Add volume for agent
-	volumeAddition := fmt.Sprintf("      - %s:%s:ro\n", do.hostAgentPath, DefaultContainerAgentPath)
+	// Add instrumentation to service
+	if err := modifier.addInstrumentation(&service, cfg, do.hostAgentPath); err != nil {
+		return fmt.Errorf("failed to add instrumentation: %w", err)
+	}
 
-	// Insert additions (this is simplified - production code should use YAML parser)
-	fmt.Println("   ⚠️  Compose file modification requires manual intervention")
-	fmt.Println("   💡 Add the following to your docker-compose.yml:")
-	fmt.Println("\n   Environment variables:")
-	fmt.Println(envAdditions)
-	fmt.Println("   Volume mount:")
-	fmt.Println(volumeAddition)
+	// Update the service in the compose data
+	composeData.Services[container.ComposeService] = service
+
+	// Write the modified compose file
+	if err := modifier.Write(composeData); err != nil {
+		return fmt.Errorf("failed to write modified compose file: %w", err)
+	}
+
+	fmt.Printf("   ✅ Modified %s\n", filepath.Base(container.ComposeFile))
+	return nil
+}
+
+// Parse reads and parses the docker-compose file
+func (cm *ComposeModifier) Parse() (*ComposeFile, error) {
+	data, err := os.ReadFile(cm.filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read compose file: %w", err)
+	}
+
+	var composeFile ComposeFile
+	if err := yaml.Unmarshal(data, &composeFile); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	// Initialize maps if they don't exist
+	if composeFile.Services == nil {
+		composeFile.Services = make(map[string]Service)
+	}
+
+	return &composeFile, nil
+}
+
+// Write writes the modified compose file back to disk
+func (cm *ComposeModifier) Write(composeFile *ComposeFile) error {
+	// Convert back to YAML with proper formatting
+	data, err := yaml.Marshal(composeFile)
+	if err != nil {
+		return fmt.Errorf("failed to marshal YAML: %w", err)
+	}
+
+	pp.Println("=== MODIFIED COMPOSE FILE CONTENT ===")
+	pp.Println(string(data))
+	pp.Println("=== END MODIFIED CONTENT ===")
+
+	// Write to file
+	if err := os.WriteFile(cm.filePath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// DEBUG: Read back what was actually written to disk
+	actualContent, readErr := os.ReadFile(cm.filePath)
+	if readErr == nil {
+		fmt.Println("=== ACTUAL FILE CONTENT ON DISK ===")
+		fmt.Println(string(actualContent))
+		fmt.Println("=== END ACTUAL CONTENT ===")
+	}
 
 	return nil
 }
 
+// isServiceInstrumented checks if service already has MW instrumentation
+func (cm *ComposeModifier) isServiceInstrumented(service *Service) bool {
+	// Check environment variables for existing instrumentation
+	for _, env := range service.Environment {
+		if strings.HasPrefix(env, "MW_API_KEY=") ||
+			strings.HasPrefix(env, "OTEL_SERVICE_NAME=") ||
+			strings.Contains(env, "javaagent") {
+			return true
+		}
+	}
+
+	// Check volumes for agent mount
+	for _, volume := range service.Volumes {
+		if strings.Contains(volume, "/opt/middleware/agents/") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// addInstrumentation adds MW instrumentation to a service
+func (cm *ComposeModifier) addInstrumentation(service *Service, cfg *config.ProcessConfiguration, hostAgentPath string) error {
+	// Build environment variables
+	mwEnv := cfg.ToEnvironmentVariables()
+
+	// Add JAVA_TOOL_OPTIONS
+	javaToolOptions := fmt.Sprintf("JAVA_TOOL_OPTIONS=-javaagent:%s", DefaultContainerAgentPath)
+
+	// Remove any existing MW_ or OTEL_ or JAVA_TOOL_OPTIONS environment variables
+	var cleanedEnv []string
+	for _, env := range service.Environment {
+		if !strings.HasPrefix(env, "MW_") &&
+			!strings.HasPrefix(env, "OTEL_") &&
+			!strings.HasPrefix(env, "JAVA_TOOL_OPTIONS=") {
+			cleanedEnv = append(cleanedEnv, env)
+		}
+	}
+
+	// Add new environment variables
+	cleanedEnv = append(cleanedEnv, javaToolOptions)
+	for key, value := range mwEnv {
+		cleanedEnv = append(cleanedEnv, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	service.Environment = cleanedEnv
+
+	// Add agent volume mount
+	agentMount := fmt.Sprintf("%s:%s:ro", hostAgentPath, DefaultContainerAgentPath)
+
+	// Check if agent volume already exists
+	agentMountExists := false
+	for _, volume := range service.Volumes {
+		if strings.Contains(volume, DefaultContainerAgentPath) {
+			agentMountExists = true
+			break
+		}
+	}
+
+	if !agentMountExists {
+		if service.Volumes == nil {
+			service.Volumes = []string{}
+		}
+		service.Volumes = append(service.Volumes, agentMount)
+	}
+
+	return nil
+}
+
+// BackupComposeFile creates a backup of the original compose file
+func (cm *ComposeModifier) BackupComposeFile() (string, error) {
+	backupPath := cm.filePath + ".backup"
+
+	data, err := os.ReadFile(cm.filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read original file: %w", err)
+	}
+
+	if err := os.WriteFile(backupPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("failed to create backup: %w", err)
+	}
+
+	return backupPath, nil
+}
+
+// RestoreFromBackup restores the compose file from backup
+func (cm *ComposeModifier) RestoreFromBackup(backupPath string) error {
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		return fmt.Errorf("failed to read backup file: %w", err)
+	}
+
+	if err := os.WriteFile(cm.filePath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to restore from backup: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateComposeFile validates that the compose file is syntactically correct
+func (cm *ComposeModifier) ValidateComposeFile() error {
+	_, err := cm.Parse()
+	return err
+}
+
 // recreateComposeService recreates a Docker Compose service
+// func (do *DockerOperations) recreateComposeService(container *discovery.DockerContainer) error {
+// 	if container.ComposeWorkDir == "" {
+// 		return fmt.Errorf("compose working directory not found")
+// 	}
+
+// 	// Change to compose directory
+// 	originalDir, _ := os.Getwd()
+// 	defer os.Chdir(originalDir)
+
+// 	if err := os.Chdir(container.ComposeWorkDir); err != nil {
+// 		return err
+// 	}
+
+// 	// Run docker-compose up -d for specific service
+// 	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", container.ComposeService)
+// 	return cmd.Run()
+// }
+
+// func (do *DockerOperations) recreateComposeService(container *discovery.DockerContainer) error {
+// 	if container.ComposeWorkDir == "" {
+// 		return fmt.Errorf("compose working directory not found")
+// 	}
+
+// 	originalDir, _ := os.Getwd()
+// 	defer os.Chdir(originalDir)
+
+// 	if err := os.Chdir(container.ComposeWorkDir); err != nil {
+// 		return err
+// 	}
+
+// 	// DEBUG: Show what directory we're in and what files exist
+// 	pp.Printf("   Working directory: %s\n", container.ComposeWorkDir)
+
+// 	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", container.ComposeService)
+
+// 	// Capture both stdout and stderr
+// 	output, err := cmd.CombinedOutput()
+// 	if err != nil {
+// 		pp.Printf("   Docker-compose error output: %s\n", string(output))
+// 		return err
+// 	}
+
+//		return nil
+//	}
 func (do *DockerOperations) recreateComposeService(container *discovery.DockerContainer) error {
 	if container.ComposeWorkDir == "" {
 		return fmt.Errorf("compose working directory not found")
 	}
 
-	// Change to compose directory
 	originalDir, _ := os.Getwd()
 	defer os.Chdir(originalDir)
 
@@ -721,9 +1047,32 @@ func (do *DockerOperations) recreateComposeService(container *discovery.DockerCo
 		return err
 	}
 
-	// Run docker-compose up -d for specific service
+	fmt.Printf("   Working directory: %s\n", container.ComposeWorkDir)
+
+	// SOLUTION: Stop and remove the existing container first
+	fmt.Println("   Stopping existing container...")
+	stopCmd := exec.CommandContext(do.ctx, "docker-compose", "stop", container.ComposeService)
+	if output, err := stopCmd.CombinedOutput(); err != nil {
+		fmt.Printf("   Warning: Failed to stop container: %s\n", string(output))
+	}
+
+	fmt.Println("   Removing existing container...")
+	rmCmd := exec.CommandContext(do.ctx, "docker-compose", "rm", "-f", container.ComposeService)
+	if output, err := rmCmd.CombinedOutput(); err != nil {
+		fmt.Printf("   Warning: Failed to remove container: %s\n", string(output))
+	}
+
+	// Now recreate with fresh container
+	fmt.Println("   Creating new container...")
 	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", container.ComposeService)
-	return cmd.Run()
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("   Docker-compose error output: %s\n", string(output))
+		return err
+	}
+
+	return nil
 }
 
 // saveContainerState saves instrumented container state
@@ -815,4 +1164,26 @@ func (do *DockerOperations) ListInstrumentedContainers() ([]ContainerState, erro
 	}
 
 	return containers, nil
+}
+
+// verifyContainerInstrumentation checks if instrumentation actually worked
+func (do *DockerOperations) verifyContainerInstrumentation(containerName string) error {
+	// Check if agent file exists in container
+	cmd := exec.CommandContext(do.ctx, "docker", "exec", containerName, "test", "-f", DefaultContainerAgentPath)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("agent file not found in container")
+	}
+
+	// Check if JAVA_TOOL_OPTIONS is set
+	cmd = exec.CommandContext(do.ctx, "docker", "exec", containerName, "sh", "-c", "echo $JAVA_TOOL_OPTIONS")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to check JAVA_TOOL_OPTIONS: %w", err)
+	}
+
+	if !strings.Contains(string(output), "javaagent") {
+		return fmt.Errorf("JAVA_TOOL_OPTIONS not set correctly")
+	}
+
+	return nil
 }
