@@ -5,6 +5,7 @@ go 1.25.3
 require (
 	github.com/k0kubun/pp v3.0.1+incompatible
 	github.com/shirou/gopsutil/v4 v4.25.9
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
