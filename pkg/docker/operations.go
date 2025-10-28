@@ -749,49 +749,6 @@ func (do *DockerOperations) runContainer(command string) error {
 	return cmd.Run()
 }
 
-// // modifyComposeFile modifies a docker-compose.yml file to add instrumentation
-// func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
-// 	// Read compose file
-// 	content, err := os.ReadFile(container.ComposeFile)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// For now, we'll do simple string manipulation
-// 	// In production, you'd want to use a YAML parser
-// 	newContent := string(content)
-
-// 	// Find the service section
-// 	serviceName := container.ComposeService
-// 	servicePattern := fmt.Sprintf("  %s:", serviceName)
-
-// 	if !strings.Contains(newContent, servicePattern) {
-// 		return fmt.Errorf("service %s not found in compose file", serviceName)
-// 	}
-
-// 	// Build environment additions
-// 	envAdditions := ""
-// 	mwEnv := cfg.ToEnvironmentVariables()
-
-// 	envAdditions += "      - JAVA_TOOL_OPTIONS=-javaagent:" + DefaultContainerAgentPath + "\n"
-// 	for k, v := range mwEnv {
-// 		envAdditions += fmt.Sprintf("      - %s=%s\n", k, v)
-// 	}
-
-// 	// Add volume for agent
-// 	volumeAddition := fmt.Sprintf("      - %s:%s:ro\n", do.hostAgentPath, DefaultContainerAgentPath)
-
-// 	// Insert additions (this is simplified - production code should use YAML parser)
-// 	fmt.Println("   ⚠️  Compose file modification requires manual intervention")
-// 	fmt.Println("   💡 Add the following to your docker-compose.yml:")
-// 	fmt.Println("\n   Environment variables:")
-// 	fmt.Println(envAdditions)
-// 	fmt.Println("   Volume mount:")
-// 	fmt.Println(volumeAddition)
-
-// 	return nil
-// }
-
 // modifyComposeFile modifies a docker-compose.yml file to add instrumentation
 func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
 	modifier := NewComposeModifier(container.ComposeFile)
