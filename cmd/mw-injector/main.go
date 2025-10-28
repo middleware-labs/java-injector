@@ -12,7 +12,10 @@ import (
 	"strings"
 
 	"github.com/k0kubun/pp"
-	"github.com/naman47vyas/mw-injector/pkg/discovery"
+	"github.com/middleware-labs/java-injector/pkg/discovery"
+
+	"github.com/middleware-labs/java-injector/pkg/config"
+	"github.com/middleware-labs/java-injector/pkg/docker"
 )
 
 const (
@@ -36,6 +39,26 @@ func main() {
 		autoInstrument()
 	case "uninstrument":
 		uninstrument()
+	case "instrument-docker":
+		instrumentDocker()
+	case "list-docker":
+		listDockerContainers()
+	case "instrument-container":
+		if len(os.Args) < 3 {
+			fmt.Println("❌ Container name required")
+			fmt.Println("Usage: mw-injector instrument-container <container-name>")
+			os.Exit(1)
+		}
+		instrumentSpecificContainer(os.Args[2])
+	case "uninstrument-docker":
+		uninstrumentDocker()
+	case "uninstrument-container":
+		if len(os.Args) < 3 {
+			fmt.Println("❌ Container name required")
+			fmt.Println("Usage: mw-injector uninstrument-container <container-name>")
+			os.Exit(1)
+		}
+		uninstrumentSpecificContainer(os.Args[2])
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -45,15 +68,30 @@ func main() {
 
 func printUsage() {
 	fmt.Println(`MW Injector Manager
-
 Usage:
-  mw-injector list              List all Java processes
-  mw-injector auto-instrument   Auto-instrument all uninstrumented processes
+  mw-injector list                          List all Java processes (host)
+  mw-injector list-docker                   List all Java Docker containers
+  mw-injector list-all                      List both host processes and Docker containers
+  mw-injector auto-instrument               Auto-instrument all uninstrumented processes (host)
+  mw-injector instrument-docker             Auto-instrument all Java Docker containers
+  mw-injector instrument-container <name>   Instrument specific Docker container
+  mw-injector uninstrument                  Uninstrument all host processes
+  mw-injector uninstrument-docker           Uninstrument all Docker containers
+  mw-injector uninstrument-container <name> Uninstrument specific Docker container
 
 Examples:
+  # Host Java processes
   sudo mw-injector list
   sudo mw-injector auto-instrument
-`)
+  
+  # Docker containers
+  sudo mw-injector list-docker
+  sudo mw-injector instrument-docker
+  sudo mw-injector instrument-container my-java-app
+  sudo mw-injector uninstrument-container my-java-app
+  
+  # List everything
+  sudo mw-injector list-all`)
 }
 
 func listProcesses() {
@@ -309,6 +347,332 @@ func autoInstrument() {
 		fmt.Println("\n✅ All services restarted!")
 	}
 }
+
+func listDockerContainers() {
+	ctx := context.Background()
+	discoverer := discovery.NewDockerDiscoverer(ctx)
+
+	containers, err := discoverer.DiscoverJavaContainers()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(containers) == 0 {
+		fmt.Println("No Java Docker containers found")
+		return
+	}
+
+	fmt.Printf("Found %d Java Docker containers:\n\n", len(containers))
+
+	for _, container := range containers {
+		fmt.Printf("Container: %s\n", container.ContainerName)
+		fmt.Printf("  ID: %s\n", container.ContainerID[:12])
+		fmt.Printf("  Image: %s:%s\n", container.ImageName, container.ImageTag)
+		fmt.Printf("  Status: %s\n", container.Status)
+		fmt.Printf("  Agent: %s\n", container.FormatAgentStatus())
+
+		if container.HasJavaAgent {
+			fmt.Printf("  Agent Path: %s\n", container.JavaAgentPath)
+		}
+
+		if container.IsCompose {
+			fmt.Printf("  Type: Docker Compose\n")
+			fmt.Printf("  Project: %s\n", container.ComposeProject)
+			fmt.Printf("  Service: %s\n", container.ComposeService)
+		}
+
+		if len(container.JarFiles) > 0 {
+			fmt.Printf("  JAR Files: %v\n", container.JarFiles)
+		}
+
+		if container.Instrumented {
+			fmt.Printf("  Status: ✅ Instrumented\n")
+		} else {
+			fmt.Printf("  Status: ⚠️  Not instrumented\n")
+		}
+
+		fmt.Println()
+	}
+}
+
+func listAll() {
+	fmt.Println("=" + strings.Repeat("=", 70))
+	fmt.Println("HOST JAVA PROCESSES")
+	fmt.Println("=" + strings.Repeat("=", 70))
+	listProcesses()
+
+	fmt.Println("\n" + strings.Repeat("=", 70))
+	fmt.Println("DOCKER JAVA CONTAINERS")
+	fmt.Println(strings.Repeat("=", 70))
+	listDockerContainers()
+}
+
+func instrumentDocker() {
+	ctx := context.Background()
+
+	// Check if running as root
+	if os.Geteuid() != 0 {
+		fmt.Println("❌ This command requires root privileges")
+		fmt.Println("   Run with: sudo mw-injector instrument-docker")
+		os.Exit(1)
+	}
+
+	// Get API key and target
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Middleware.io API Key: ")
+	apiKey, _ := reader.ReadString('\n')
+	apiKey = strings.TrimSpace(apiKey)
+
+	if apiKey == "" {
+		fmt.Println("❌ API key is required")
+		os.Exit(1)
+	}
+
+	fmt.Print("Target endpoint [https://prod.middleware.io:443]: ")
+	target, _ := reader.ReadString('\n')
+	target = strings.TrimSpace(target)
+	if target == "" {
+		target = "https://prod.middleware.io:443"
+	}
+
+	fmt.Printf("Java agent path [%s]: ", DefaultAgentPath)
+	agentPath, _ := reader.ReadString('\n')
+	agentPath = strings.TrimSpace(agentPath)
+	if agentPath == "" {
+		agentPath = DefaultAgentPath
+	}
+
+	// Ensure agent is installed and accessible
+	installedPath, err := EnsureAgentInstalled(agentPath)
+	if err != nil {
+		fmt.Printf("❌ Failed to prepare agent: %v\n", err)
+		return
+	}
+
+	// Discover Docker containers
+	discoverer := discovery.NewDockerDiscoverer(ctx)
+	containers, err := discoverer.DiscoverJavaContainers()
+	if err != nil {
+		fmt.Printf("❌ Error discovering containers: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(containers) == 0 {
+		fmt.Println("No Java Docker containers found")
+		return
+	}
+
+	fmt.Printf("\n🔍 Found %d Java Docker containers\n\n", len(containers))
+	fmt.Printf("✅ Using agent at: %s\n\n", installedPath)
+
+	configured := 0
+	updated := 0
+	skipped := 0
+
+	dockerOps := docker.NewDockerOperations(ctx, installedPath)
+
+	for _, container := range containers {
+		// Skip if already instrumented
+		if container.Instrumented && container.IsMiddlewareAgent {
+			fmt.Printf("✅ Container %s is already instrumented\n", container.ContainerName)
+			fmt.Print("   Update configuration? [y/N]: ")
+
+			response, _ := reader.ReadString('\n')
+			response = strings.TrimSpace(strings.ToLower(response))
+
+			if response != "y" && response != "yes" {
+				fmt.Printf("⏭️  Skipping container %s\n\n", container.ContainerName)
+				skipped++
+				continue
+			}
+		}
+
+		// Create configuration
+		cfg := config.DefaultConfiguration()
+		cfg.MWAPIKey = apiKey
+		cfg.MWTarget = target
+		cfg.MWServiceName = container.GetServiceName()
+		cfg.JavaAgentPath = docker.DefaultContainerAgentPath
+
+		// Instrument container
+		err := dockerOps.InstrumentContainer(container.ContainerName, &cfg)
+		if err != nil {
+			fmt.Printf("❌ Failed to instrument container %s: %v\n", container.ContainerName, err)
+			skipped++
+		} else {
+			if container.Instrumented {
+				updated++
+			} else {
+				configured++
+			}
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("\n🎉 Docker instrumentation complete!\n")
+	fmt.Printf("   Configured: %d\n", configured)
+	fmt.Printf("   Updated: %d\n", updated)
+	fmt.Printf("   Skipped: %d\n", skipped)
+
+	if configured > 0 || updated > 0 {
+		fmt.Println("\n📊 Containers are now sending telemetry data to Middleware.io")
+	}
+}
+
+func instrumentSpecificContainer(containerName string) {
+	ctx := context.Background()
+
+	// Check if running as root
+	if os.Geteuid() != 0 {
+		fmt.Println("❌ This command requires root privileges")
+		fmt.Println("   Run with: sudo mw-injector instrument-container " + containerName)
+		os.Exit(1)
+	}
+
+	// Get API key and target
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Middleware.io API Key: ")
+	apiKey, _ := reader.ReadString('\n')
+	apiKey = strings.TrimSpace(apiKey)
+
+	if apiKey == "" {
+		fmt.Println("❌ API key is required")
+		os.Exit(1)
+	}
+
+	fmt.Print("Target endpoint [https://prod.middleware.io:443]: ")
+	target, _ := reader.ReadString('\n')
+	target = strings.TrimSpace(target)
+	if target == "" {
+		target = "https://prod.middleware.io:443"
+	}
+
+	fmt.Printf("Java agent path [%s]: ", DefaultAgentPath)
+	agentPath, _ := reader.ReadString('\n')
+	agentPath = strings.TrimSpace(agentPath)
+	if agentPath == "" {
+		agentPath = DefaultAgentPath
+	}
+
+	// Ensure agent is installed
+	installedPath, err := EnsureAgentInstalled(agentPath)
+	if err != nil {
+		fmt.Printf("❌ Failed to prepare agent: %v\n", err)
+		return
+	}
+
+	// Verify container exists
+	discoverer := discovery.NewDockerDiscoverer(ctx)
+	container, err := discoverer.GetContainerByName(containerName)
+	if err != nil {
+		fmt.Printf("❌ Container not found: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n🔍 Found container: %s\n", container.ContainerName)
+	fmt.Printf("   Image: %s:%s\n", container.ImageName, container.ImageTag)
+	fmt.Printf("   Status: %s\n\n", container.Status)
+
+	// Create configuration
+	cfg := config.DefaultConfiguration()
+	cfg.MWAPIKey = apiKey
+	cfg.MWTarget = target
+	cfg.MWServiceName = container.GetServiceName()
+	cfg.JavaAgentPath = docker.DefaultContainerAgentPath
+
+	// Instrument
+	dockerOps := docker.NewDockerOperations(ctx, installedPath)
+	if err := dockerOps.InstrumentContainer(containerName, &cfg); err != nil {
+		fmt.Printf("❌ Failed to instrument container: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n🎉 Container instrumented successfully!")
+	fmt.Println("📊 Container is now sending telemetry data to Middleware.io")
+}
+
+func uninstrumentDocker() {
+	ctx := context.Background()
+
+	// Check if running as root
+	if os.Geteuid() != 0 {
+		fmt.Println("❌ This command requires root privileges")
+		fmt.Println("   Run with: sudo mw-injector uninstrument-docker")
+		os.Exit(1)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Uninstrument ALL Docker containers? [y/N]: ")
+	response, _ := reader.ReadString('\n')
+	response = strings.TrimSpace(strings.ToLower(response))
+
+	if response != "y" && response != "yes" {
+		fmt.Println("Cancelled")
+		return
+	}
+
+	dockerOps := docker.NewDockerOperations(ctx, DefaultAgentPath)
+
+	// List instrumented containers
+	instrumented, err := dockerOps.ListInstrumentedContainers()
+	if err != nil {
+		fmt.Printf("❌ Error listing instrumented containers: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(instrumented) == 0 {
+		fmt.Println("No instrumented Docker containers found")
+		return
+	}
+
+	fmt.Printf("\n🔧 Uninstrumenting %d containers...\n\n", len(instrumented))
+
+	success := 0
+	failed := 0
+
+	for _, container := range instrumented {
+		err := dockerOps.UninstrumentContainer(container.ContainerName)
+		if err != nil {
+			fmt.Printf("❌ Failed to uninstrument %s: %v\n", container.ContainerName, err)
+			failed++
+		} else {
+			success++
+		}
+	}
+
+	fmt.Printf("\n🎉 Uninstrumentation complete!\n")
+	fmt.Printf("   Success: %d\n", success)
+	fmt.Printf("   Failed: %d\n", failed)
+}
+
+func uninstrumentSpecificContainer(containerName string) {
+	ctx := context.Background()
+
+	// Check if running as root
+	if os.Geteuid() != 0 {
+		fmt.Println("❌ This command requires root privileges")
+		fmt.Println("   Run with: sudo mw-injector uninstrument-container " + containerName)
+		os.Exit(1)
+	}
+
+	dockerOps := docker.NewDockerOperations(ctx, DefaultAgentPath)
+
+	fmt.Printf("🔧 Uninstrumenting container: %s\n\n", containerName)
+
+	if err := dockerOps.UninstrumentContainer(containerName); err != nil {
+		fmt.Printf("❌ Failed to uninstrument container: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("🎉 Container uninstrumented successfully!")
+}
+
+// Keep all existing functions from the original main.go
+// (listProcesses, autoInstrument, uninstrument, etc.)
 
 func createSystemdDropIn(serviceName string, configPath string, isTomcat bool) error {
 	// Read the config file to get actual values
