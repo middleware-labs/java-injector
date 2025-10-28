@@ -46,15 +46,17 @@ type InstrumentedState struct {
 
 // ContainerState stores information about an instrumented container
 type ContainerState struct {
-	ContainerID       string            `json:"container_id"`
-	ContainerName     string            `json:"container_name"`
-	ImageName         string            `json:"image_name"`
-	InstrumentedAt    time.Time         `json:"instrumented_at"`
-	AgentPath         string            `json:"agent_path"`
-	OriginalEnv       map[string]string `json:"original_env"`
-	ComposeFile       string            `json:"compose_file,omitempty"`
-	ComposeService    string            `json:"compose_service,omitempty"`
-	RecreationCommand string            `json:"recreation_command,omitempty"`
+	ContainerID    string            `json:"container_id"`
+	ContainerName  string            `json:"container_name"`
+	ImageName      string            `json:"image_name"`
+	InstrumentedAt time.Time         `json:"instrumented_at"`
+	AgentPath      string            `json:"agent_path"`
+	OriginalEnv    map[string]string `json:"original_env"`
+	ComposeFile    string            `json:"compose_file,omitempty"`
+	ComposeService string            `json:"compose_service,omitempty"`
+
+	RecreationCommand string `json:"recreation_command,omitempty"`
+	OriginalConfig    string `json:"original_config,omitempty"`
 }
 
 // InstrumentContainer instruments a specific Docker container
@@ -82,19 +84,28 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
 	fmt.Printf("🔧 Instrumenting standalone container: %s\n", container.ContainerName)
 
-	// Step 1: Copy agent to container
-	if err := do.copyAgentToContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to copy agent: %w", err)
-	}
-	fmt.Println("   ✅ Agent copied to container")
-
-	// Step 2: Get current container configuration
+	// Step 1: Get and save original container configuration BEFORE making any changes
 	containerConfig, err := do.getContainerConfig(container.ContainerID)
 	if err != nil {
 		return fmt.Errorf("failed to get container config: %w", err)
 	}
 
-	// Step 3: Build new environment variables
+	// Save original configuration as JSON string for restoration
+	originalConfigBytes, err := json.Marshal(containerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to serialize original config: %w", err)
+	}
+
+	// Build original recreation command from current state (before instrumentation)
+	originalRecreationCommand := do.buildOriginalDockerRunCommand(containerConfig, container.ContainerName)
+
+	// Step 2: Copy agent to container
+	if err := do.copyAgentToContainer(container.ContainerID); err != nil {
+		return fmt.Errorf("failed to copy agent: %w", err)
+	}
+	fmt.Println("   ✅ Agent copied to container")
+
+	// Step 3: Build new environment variables with instrumentation
 	newEnv := do.buildInstrumentationEnv(container, cfg)
 
 	// Step 4: Stop the container
@@ -107,6 +118,8 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 	newImageName := fmt.Sprintf("%s-mw-instrumented:latest", container.ContainerName)
 	if err := do.commitContainer(container.ContainerID, newImageName); err != nil {
 		fmt.Printf("   ⚠️  Warning: Could not commit container: %v\n", err)
+		// Use original image name if commit fails
+		newImageName = container.ImageName + ":" + container.ImageTag
 	}
 
 	// Step 6: Remove old container
@@ -114,19 +127,123 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 		return fmt.Errorf("failed to remove old container: %w", err)
 	}
 
-	// Step 7: Recreate container with instrumentation
-	runCommand := do.buildDockerRunCommand(containerConfig, newEnv, container.ContainerName)
-	if err := do.runContainer(runCommand); err != nil {
+	// Step 7: Recreate container with instrumentation using the committed image
+	instrumentedRunCommand := do.buildInstrumentedDockerRunCommand(containerConfig, newEnv, container.ContainerName, newImageName)
+	if err := do.runContainer(instrumentedRunCommand); err != nil {
 		return fmt.Errorf("failed to recreate container: %w", err)
 	}
 
-	// Step 8: Save state
-	if err := do.saveContainerState(container, cfg); err != nil {
+	// Step 8: Save state with ORIGINAL recreation command for proper restoration
+	if err := do.saveContainerStateWithCommand(container, cfg, originalRecreationCommand, string(originalConfigBytes)); err != nil {
 		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
 	}
 
 	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
 	return nil
+}
+
+// buildInstrumentedDockerRunCommand creates docker run command with instrumentation
+func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]interface{}, env map[string]string, containerName, imageName string) string {
+	var cmdParts []string
+	cmdParts = append(cmdParts, "docker", "run", "-d")
+	cmdParts = append(cmdParts, "--name", containerName)
+
+	// Add environment variables (with instrumentation)
+	for k, v := range env {
+		cmdParts = append(cmdParts, "-e", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Add original volume mounts
+	if mounts, ok := config["Mounts"].([]interface{}); ok {
+		for _, m := range mounts {
+			if mount, ok := m.(map[string]interface{}); ok {
+				src, srcOk := mount["Source"].(string)
+				dst, dstOk := mount["Destination"].(string)
+
+				if srcOk && dstOk {
+					mode := "rw"
+					if rw, ok := mount["RW"].(bool); ok && !rw {
+						mode = "ro"
+					}
+					cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
+				}
+			}
+		}
+	}
+
+	// Add agent volume mount
+	cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:ro", do.hostAgentPath, DefaultContainerAgentPath))
+
+	// Add port mappings
+	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
+		if ports, ok := networkSettings["Ports"].(map[string]interface{}); ok {
+			for containerPort, bindings := range ports {
+				if bindingList, ok := bindings.([]interface{}); ok && len(bindingList) > 0 {
+					if binding, ok := bindingList[0].(map[string]interface{}); ok {
+						if hostPort, ok := binding["HostPort"].(string); ok && hostPort != "" {
+							hostIP := "0.0.0.0"
+							if hip, ok := binding["HostIp"].(string); ok && hip != "" {
+								hostIP = hip
+							}
+							cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, hostPort, containerPort))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Add networks
+	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
+		if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
+			for networkName := range networks {
+				if networkName != "bridge" {
+					cmdParts = append(cmdParts, "--network", networkName)
+				}
+			}
+		}
+	}
+
+	// Add restart policy
+	if hostConfig, ok := config["HostConfig"].(map[string]interface{}); ok {
+		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
+			if name, ok := restartPolicy["Name"].(string); ok && name != "" && name != "no" {
+				if maxRetries, ok := restartPolicy["MaximumRetryCount"].(float64); ok && maxRetries > 0 {
+					cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
+				} else {
+					cmdParts = append(cmdParts, "--restart", name)
+				}
+			}
+		}
+
+		// Add working directory
+		if configSection, ok := config["Config"].(map[string]interface{}); ok {
+			if workingDir, ok := configSection["WorkingDir"].(string); ok && workingDir != "" {
+				cmdParts = append(cmdParts, "--workdir", workingDir)
+			}
+
+			// Add user
+			if user, ok := configSection["User"].(string); ok && user != "" {
+				cmdParts = append(cmdParts, "--user", user)
+			}
+
+			// Add original command
+			if cmd, ok := configSection["Cmd"].([]interface{}); ok && len(cmd) > 0 {
+				cmdParts = append(cmdParts, imageName)
+				for _, c := range cmd {
+					if cStr, ok := c.(string); ok {
+						cmdParts = append(cmdParts, cStr)
+					}
+				}
+				return strings.Join(cmdParts, " ")
+			}
+		}
+	}
+
+	// Add image
+	cmdParts = append(cmdParts, imageName)
+
+	return strings.Join(cmdParts, " ")
 }
 
 // instrumentComposeContainer instruments a Docker Compose-managed container
@@ -166,6 +283,148 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 	return nil
 }
 
+// buildOriginalDockerRunCommand creates the original docker run command before instrumentation
+func (do *DockerOperations) buildOriginalDockerRunCommand(config map[string]interface{}, containerName string) string {
+	var cmdParts []string
+	cmdParts = append(cmdParts, "docker", "run", "-d")
+	cmdParts = append(cmdParts, "--name", containerName)
+
+	configSection, ok := config["Config"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	// Add original environment variables (without instrumentation)
+	if env, ok := configSection["Env"].([]interface{}); ok {
+		for _, e := range env {
+			if envStr, ok := e.(string); ok {
+				// Skip any existing MW_ or OTEL_ variables and JAVA_TOOL_OPTIONS with javaagent
+				if !strings.HasPrefix(envStr, "MW_") &&
+					!strings.HasPrefix(envStr, "OTEL_") &&
+					!(strings.HasPrefix(envStr, "JAVA_TOOL_OPTIONS=") && strings.Contains(envStr, "javaagent")) {
+					cmdParts = append(cmdParts, "-e", envStr)
+				}
+			}
+		}
+	}
+
+	// Add original volume mounts (excluding our agent mount)
+	if mounts, ok := config["Mounts"].([]interface{}); ok {
+		for _, m := range mounts {
+			if mount, ok := m.(map[string]interface{}); ok {
+				src, srcOk := mount["Source"].(string)
+				dst, dstOk := mount["Destination"].(string)
+
+				if srcOk && dstOk {
+					// Skip our agent mount
+					if dst == DefaultContainerAgentPath {
+						continue
+					}
+
+					mode := "rw"
+					if rw, ok := mount["RW"].(bool); ok && !rw {
+						mode = "ro"
+					}
+					cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
+				}
+			}
+		}
+	}
+
+	// Add port mappings
+	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
+		if ports, ok := networkSettings["Ports"].(map[string]interface{}); ok {
+			for containerPort, bindings := range ports {
+				if bindingList, ok := bindings.([]interface{}); ok && len(bindingList) > 0 {
+					if binding, ok := bindingList[0].(map[string]interface{}); ok {
+						if hostPort, ok := binding["HostPort"].(string); ok && hostPort != "" {
+							hostIP := "0.0.0.0"
+							if hip, ok := binding["HostIp"].(string); ok && hip != "" {
+								hostIP = hip
+							}
+							cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, hostPort, containerPort))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Add networks
+	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
+		if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
+			for networkName := range networks {
+				if networkName != "bridge" { // Skip default bridge network
+					cmdParts = append(cmdParts, "--network", networkName)
+				}
+			}
+		}
+	}
+
+	// Add restart policy
+	if hostConfig, ok := config["HostConfig"].(map[string]interface{}); ok {
+		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
+			if name, ok := restartPolicy["Name"].(string); ok && name != "" && name != "no" {
+				if maxRetries, ok := restartPolicy["MaximumRetryCount"].(float64); ok && maxRetries > 0 {
+					cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
+				} else {
+					cmdParts = append(cmdParts, "--restart", name)
+				}
+			}
+		}
+
+		// Add working directory
+		if workingDir, ok := configSection["WorkingDir"].(string); ok && workingDir != "" {
+			cmdParts = append(cmdParts, "--workdir", workingDir)
+		}
+
+		// Add user
+		if user, ok := configSection["User"].(string); ok && user != "" {
+			cmdParts = append(cmdParts, "--user", user)
+		}
+	}
+
+	// Add original image
+	if image, ok := configSection["Image"].(string); ok {
+		cmdParts = append(cmdParts, image)
+	}
+
+	// Add original command
+	if cmd, ok := configSection["Cmd"].([]interface{}); ok && len(cmd) > 0 {
+		for _, c := range cmd {
+			if cStr, ok := c.(string); ok {
+				cmdParts = append(cmdParts, cStr)
+			}
+		}
+	}
+
+	return strings.Join(cmdParts, " ")
+}
+
+// saveContainerStateWithCommand saves container state with recreation command
+func (do *DockerOperations) saveContainerStateWithCommand(container *discovery.DockerContainer, cfg *config.ProcessConfiguration, recreationCommand, originalConfig string) error {
+	state, _ := do.loadState()
+	if state.Containers == nil {
+		state.Containers = make(map[string]ContainerState)
+	}
+
+	state.Containers[container.ContainerName] = ContainerState{
+		ContainerID:       container.ContainerID,
+		ContainerName:     container.ContainerName,
+		ImageName:         container.ImageName,
+		InstrumentedAt:    time.Now(),
+		AgentPath:         do.hostAgentPath,
+		OriginalEnv:       container.Environment,
+		ComposeFile:       container.ComposeFile,
+		ComposeService:    container.ComposeService,
+		RecreationCommand: recreationCommand, // Now properly set!
+		OriginalConfig:    originalConfig,    // Full original config for debugging
+	}
+	state.UpdatedAt = time.Now()
+
+	return do.saveState(state)
+}
+
 // UninstrumentContainer removes instrumentation from a container
 func (do *DockerOperations) UninstrumentContainer(containerName string) error {
 	// Load state to check if container was instrumented by us
@@ -191,30 +450,32 @@ func (do *DockerOperations) UninstrumentContainer(containerName string) error {
 
 // uninstrumentStandaloneContainer removes instrumentation from standalone container
 func (do *DockerOperations) uninstrumentStandaloneContainer(state *ContainerState) error {
-	// If we have the recreation command, we can try to restore
-	if state.RecreationCommand != "" {
-		fmt.Println("   🔄 Restoring original container configuration...")
-
-		// Stop current container
-		if err := do.stopContainerByName(state.ContainerName); err != nil {
-			fmt.Printf("   ⚠️  Warning: Could not stop container: %v\n", err)
-		}
-
-		// Remove current container
-		if err := do.removeContainerByName(state.ContainerName); err != nil {
-			fmt.Printf("   ⚠️  Warning: Could not remove container: %v\n", err)
-		}
-
-		// Recreate with original command
-		if err := do.runContainer(state.RecreationCommand); err != nil {
-			return fmt.Errorf("failed to recreate container: %w", err)
-		}
-
-		fmt.Printf("   ✅ Container %s restored\n", state.ContainerName)
-	} else {
+	// Check if we have the original recreation command
+	if state.RecreationCommand == "" {
 		fmt.Println("   ⚠️  Cannot fully restore container without original configuration")
 		fmt.Println("   💡 Suggestion: Remove JAVA_TOOL_OPTIONS and MW_* env vars manually and restart")
+		return do.removeContainerState(state.ContainerName)
 	}
+
+	fmt.Println("   🔄 Restoring original container configuration...")
+
+	// Stop current container
+	if err := do.stopContainerByName(state.ContainerName); err != nil {
+		fmt.Printf("   ⚠️  Warning: Could not stop container: %v\n", err)
+	}
+
+	// Remove current container
+	if err := do.removeContainerByName(state.ContainerName); err != nil {
+		fmt.Printf("   ⚠️  Warning: Could not remove container: %v\n", err)
+	}
+
+	// Recreate with original command
+	fmt.Printf("   Executing: %s\n", state.RecreationCommand)
+	if err := do.runContainer(state.RecreationCommand); err != nil {
+		return fmt.Errorf("failed to recreate container with original config: %w", err)
+	}
+
+	fmt.Printf("   ✅ Container %s restored to original configuration\n", state.ContainerName)
 
 	// Remove from state
 	return do.removeContainerState(state.ContainerName)
