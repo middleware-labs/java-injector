@@ -51,6 +51,11 @@ func (r *Router) registerCommands() {
 	r.commands["uninstrument"] = commands.NewUninstrumentCommand(r.config)
 	r.commands["uninstrument-docker"] = commands.NewUninstrumentDockerCommand(r.config)
 	r.commands["uninstrument-container"] = commands.NewUninstrumentContainerCommand(r.config)
+
+	// Configuration commands
+	r.commands["config-init"] = commands.NewConfigInitCommand(r.config)
+	r.commands["config-validate"] = commands.NewConfigValidateCommand(r.config)
+	r.commands["config-show"] = commands.NewConfigShowCommand(r.config)
 }
 
 // Run executes the appropriate command based on command line arguments
@@ -77,7 +82,13 @@ func (r *Router) Run(args []string) error {
 	case "instrument-container", "uninstrument-container":
 		return r.executeSingleArgCommand(commandName, commandArgs)
 
+	case "config-init":
+		return r.executeOptionalArgCommand(commandName, commandArgs)
+
 	case "auto-instrument", "instrument-docker", "uninstrument", "uninstrument-docker":
+		return r.executeNoArgsCommand(commandName, commandArgs)
+
+	case "config-validate", "config-show":
 		return r.executeNoArgsCommand(commandName, commandArgs)
 
 	default:
@@ -136,6 +147,14 @@ func (r *Router) getSingleArgUsageError(commandName string) error {
 	}
 }
 
+// GetCommandDescription returns the description for a specific command
+func (r *Router) GetCommandDescription(commandName string) string {
+	if cmd, exists := r.commands[commandName]; exists {
+		return cmd.GetDescription()
+	}
+	return "Unknown command"
+}
+
 // GetAvailableCommands returns a list of all registered commands
 func (r *Router) GetAvailableCommands() []string {
 	var commands []string
@@ -145,10 +164,23 @@ func (r *Router) GetAvailableCommands() []string {
 	return commands
 }
 
-// GetCommandDescription returns the description for a specific command
-func (r *Router) GetCommandDescription(commandName string) string {
-	if cmd, exists := r.commands[commandName]; exists {
-		return cmd.GetDescription()
+// executeOptionalArgCommand executes commands that take an optional argument
+func (r *Router) executeOptionalArgCommand(commandName string, args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("command '%s' accepts at most one argument", commandName)
 	}
-	return "Unknown command"
+
+	cmd, exists := r.commands[commandName]
+	if !exists {
+		return fmt.Errorf("command '%s' not implemented yet", commandName)
+	}
+
+	// Set the argument on the command if provided and if it supports it
+	if len(args) == 1 {
+		if singleArgCmd, ok := cmd.(SingleArgCommand); ok {
+			singleArgCmd.SetArg(args[0])
+		}
+	}
+
+	return cmd.Execute()
 }
