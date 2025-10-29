@@ -80,6 +80,13 @@ func (r *Router) Run(args []string) error {
 	case "auto-instrument", "instrument-docker", "uninstrument", "uninstrument-docker":
 		return r.executeNoArgsCommand(commandName, commandArgs)
 
+	// Add these cases to the switch statement in pkg/cli/router.go
+	case "auto-instrument-config":
+		return r.executeOptionalArgCommand(commandName, commandArgs)
+
+	case "instrument-docker-config":
+		return r.executeOptionalArgCommand(commandName, commandArgs)
+
 	default:
 		PrintUsage()
 		return fmt.Errorf("unknown command: %s", commandName)
@@ -122,6 +129,24 @@ func (r *Router) executeSingleArgCommand(commandName string, args []string) erro
 	}
 
 	return fmt.Errorf("command '%s' does not support single argument execution", commandName)
+}
+
+func (r *Router) executeOptionalArgCommand(commandName string, args []string) error {
+	var configPath string
+	if len(args) > 0 {
+		configPath = args[0]
+	}
+
+	switch commandName {
+	case "auto-instrument-config":
+		cmd := commands.NewConfigAutoInstrumentCommand(r.config, configPath)
+		return cmd.Execute()
+	case "instrument-docker-config":
+		cmd := commands.NewConfigInstrumentDockerCommand(r.config, configPath)
+		return cmd.Execute()
+	default:
+		return fmt.Errorf("unknown optional arg command: %s", commandName)
+	}
 }
 
 // getSingleArgUsageError returns appropriate usage error for single-arg commands
