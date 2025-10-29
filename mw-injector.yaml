@@ -1,0 +1,105 @@
+# MW Injector Configuration File
+# Place this file in /etc/middleware/mw-injector.yaml or ~/.mw-injector.yaml
+
+# Middleware.io Configuration (Required)
+middleware:
+  api_key: "your-api-key-here"
+  target: "https://prod.middleware.io:443"
+  
+# Optional: Override default target for different environments
+# target: "https://staging.middleware.io:443"
+# target: "https://dev.middleware.io:443"
+
+# Agent Configuration
+agent:
+  # Path to Java agent JAR (optional - defaults to standard location)
+  path: "/opt/middleware/agents/middleware-javaagent-1.8.1.jar"
+  
+  # Agent version to download if not present (optional)
+  # version: "1.8.1"
+  
+  # Auto-download agent if not found (optional - defaults to false)
+  # auto_download: true
+
+# Service Configuration
+service:
+  # Default service name prefix (optional)
+  # name_prefix: "prod"
+  
+  # Default service name suffix (optional) 
+  # name_suffix: "v1"
+  
+  # Environment tag (optional)
+  environment: "production"
+  
+  # Additional tags (optional)
+  tags:
+    team: "platform"
+    region: "us-east-1"
+    datacenter: "dc1"
+
+# Host Configuration (optional)
+host:
+  # Override hostname (optional - defaults to system hostname)
+  # hostname: "custom-hostname"
+  
+  # Include hostname in service names (optional - defaults to false)
+  include_hostname: false
+
+# Instrumentation Behavior (optional)
+instrumentation:
+  # Skip confirmation prompts (optional - defaults to false for safety)
+  auto_confirm: false
+  
+  # Skip already instrumented processes (optional - defaults to false)
+  skip_instrumented: false
+  
+  # Restart services after instrumentation (optional - defaults to true)
+  restart_services: true
+  
+  # Handle permission issues (optional)
+  permission_handling:
+    # Auto-copy agent to accessible location (defaults to true)
+    auto_copy_agent: true
+    
+    # Skip processes with permission issues (defaults to false)
+    skip_permission_errors: false
+
+# Docker Configuration (optional)
+docker:
+  # Default network for instrumented containers (optional)
+  # network: "monitoring"
+  
+  # Volume mount options (optional)
+  agent_mount:
+    # Host path to agent
+    host_path: "/opt/middleware/agents"
+    # Container path
+    container_path: "/opt/middleware/agents"
+    # Mount mode
+    mode: "ro"
+
+# Logging Configuration (optional)
+logging:
+  # Log level: DEBUG, INFO, WARN, ERROR (defaults to INFO)
+  level: "INFO"
+  
+  # Log to file (optional)
+  # file: "/var/log/mw-injector.log"
+  
+  # JSON formatted logs (optional - defaults to false)
+  # json: true
+
+# Advanced Configuration (optional)
+advanced:
+  # Timeout for operations in seconds (defaults to 300)
+  timeout: 300
+  
+  # Maximum concurrent operations (defaults to 10)
+  max_concurrency: 10
+  
+  # State directory (optional - defaults to /etc/middleware/state)
+  # state_directory: "/custom/state/dir"
+  
+  # Backup configurations before changes (defaults to true)
+  backup_configs: true

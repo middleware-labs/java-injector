@@ -33,33 +33,24 @@ func (c *AutoInstrumentCommand) Execute() error {
 		return fmt.Errorf("❌ This command requires root privileges\n   Run with: sudo mw-injector auto-instrument")
 	}
 
-	// Get API key and target
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Print("Middleware.io API Key: ")
-	apiKey, _ := reader.ReadString('\n')
-	apiKey = strings.TrimSpace(apiKey)
-
-	if apiKey == "" {
-		return fmt.Errorf("❌ API key is required")
+	// Load configuration
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("❌ Failed to load configuration: %w\n   Create mw-injector.yaml or set required environment variables", err)
 	}
 
-	fmt.Print("Target endpoint [https://prod.middleware.io:443]: ")
-	target, _ := reader.ReadString('\n')
-	target = strings.TrimSpace(target)
-	if target == "" {
-		target = "https://prod.middleware.io:443"
+	// Display configuration being used
+	fmt.Printf("🔧 Using configuration:\n")
+	fmt.Printf("   API Key: %s***\n", cfg.Middleware.APIKey[:8])
+	fmt.Printf("   Target: %s\n", cfg.Middleware.Target)
+	fmt.Printf("   Agent Path: %s\n", cfg.Agent.Path)
+	if cfg.Service.Environment != "" {
+		fmt.Printf("   Environment: %s\n", cfg.Service.Environment)
 	}
-
-	fmt.Printf("Java agent path [%s]: \n", c.config.DefaultAgentPath)
-	agentPath, _ := reader.ReadString('\n')
-	agentPath = strings.TrimSpace(agentPath)
-	if agentPath == "" {
-		agentPath = c.config.DefaultAgentPath
-	}
+	fmt.Println()
 
 	// Ensure agent is installed and accessible
-	installedPath, err := agent.EnsureInstalled(agentPath, c.config.DefaultAgentPath)
+	installedPath, err := agent.EnsureInstalled(cfg.Agent.Path, c.config.DefaultAgentPath)
 	if err != nil {
 		return fmt.Errorf("failed to prepare agent: %w", err)
 	}
@@ -76,8 +67,7 @@ func (c *AutoInstrumentCommand) Execute() error {
 	}
 
 	fmt.Printf("\n🔍 Found %d Java processes\n\n", len(processes))
-
-	fmt.Printf("\n✅ Using agent at: %s\n", installedPath)
+	fmt.Printf("✅ Using agent at: %s\n", installedPath)
 	fmt.Printf("   Permissions: world-readable (0644)\n")
 	fmt.Printf("   Owner: root:root\n")
 	fmt.Printf("   Accessible by: ALL users\n\n")
@@ -89,12 +79,18 @@ func (c *AutoInstrumentCommand) Execute() error {
 
 	for _, proc := range processes {
 		// Check if agent is accessible by systemd for this specific process
-		if err := agent.CheckAccessibleBySystemd(agentPath, proc.ProcessOwner); err != nil {
-			fmt.Printf("❌ Skipping PID %d (%s) due to a permission issue.\n", proc.ProcessPID, proc.ServiceName)
-			fmt.Printf("   └── Reason: The service user '%s' cannot access the agent file within the systemd security context.\n", proc.ProcessOwner)
-			fmt.Printf("   └── To fix, check file permissions and SELinux/AppArmor policies.\n\n")
-			skipped++
-			continue
+		if err := agent.CheckAccessibleBySystemd(installedPath, proc.ProcessOwner); err != nil {
+			if cfg.Instrumentation.PermissionHandling.SkipPermissionErrors {
+				fmt.Printf("⚠️  Skipping PID %d (%s): permission issue (skip_permission_errors=true)\n", proc.ProcessPID, proc.ServiceName)
+				skipped++
+				continue
+			} else {
+				fmt.Printf("❌ Skipping PID %d (%s) due to a permission issue.\n", proc.ProcessPID, proc.ServiceName)
+				fmt.Printf("   └── Reason: The service user '%s' cannot access the agent file within the systemd security context.\n", proc.ProcessOwner)
+				fmt.Printf("   └── To fix, check file permissions and SELinux/AppArmor policies.\n\n")
+				skipped++
+				continue
+			}
 		}
 
 		configPath := c.getConfigPath(&proc)
@@ -102,31 +98,43 @@ func (c *AutoInstrumentCommand) Execute() error {
 
 		// Check if already configured
 		if c.fileExists(configPath) {
-			fmt.Printf("⚠️  PID %d (%s) is already configured\n", proc.ProcessPID, proc.ServiceName)
-			fmt.Print("   Update configuration? [y/N]: ")
-
-			response, _ := reader.ReadString('\n')
-			response = strings.TrimSpace(strings.ToLower(response))
-
-			if response != "y" && response != "yes" {
-				fmt.Printf("⭐️  Skipping PID %d (%s)\n\n", proc.ProcessPID, proc.ServiceName)
+			if cfg.Instrumentation.SkipInstrumented {
+				fmt.Printf("⚠️  Skipping PID %d (%s): already instrumented (skip_instrumented=true)\n", proc.ProcessPID, proc.ServiceName)
 				skipped++
 				continue
 			}
-			shouldUpdate = true
+
+			if cfg.Instrumentation.AutoConfirm {
+				fmt.Printf("🔄 Updating PID %d (%s): auto-confirm enabled\n", proc.ProcessPID, proc.ServiceName)
+				shouldUpdate = true
+			} else {
+				fmt.Printf("⚠️  PID %d (%s) is already configured\n", proc.ProcessPID, proc.ServiceName)
+				fmt.Print("   Update configuration? [y/N]: ")
+
+				reader := bufio.NewReader(os.Stdin)
+				response, _ := reader.ReadString('\n')
+				response = strings.TrimSpace(strings.ToLower(response))
+
+				if response != "y" && response != "yes" {
+					fmt.Printf("⭐️  Skipping PID %d (%s)\n\n", proc.ProcessPID, proc.ServiceName)
+					skipped++
+					continue
+				}
+				shouldUpdate = true
+			}
 		}
 
 		// Generate service name and config
 		var systemdServiceName string
-		if proc.IsTomcat() {
-			serviceName := naming.GenerateServiceName(&proc)
+		serviceName := c.generateServiceNameFromConfig(&proc, cfg)
 
+		if proc.IsTomcat() {
 			tomcatConfig := &systemd.TomcatConfig{
 				InstanceName: serviceName,
 				Pattern:      serviceName,
-				APIKey:       apiKey,
-				Target:       target,
-				AgentPath:    agentPath,
+				APIKey:       cfg.Middleware.APIKey,
+				Target:       cfg.Middleware.Target,
+				AgentPath:    installedPath,
 			}
 
 			err := systemd.CreateTomcatConfig(configPath, tomcatConfig)
@@ -141,7 +149,7 @@ func (c *AutoInstrumentCommand) Execute() error {
 				ServiceName: systemdServiceName,
 				ConfigPath:  configPath,
 				IsTomcat:    true,
-				AgentPath:   agentPath,
+				AgentPath:   installedPath,
 			}
 
 			err = systemd.CreateDropIn(dropInConfig)
@@ -158,14 +166,13 @@ func (c *AutoInstrumentCommand) Execute() error {
 				configured++
 			}
 		} else {
-			serviceName := naming.GenerateServiceName(&proc)
 			systemdServiceName = systemd.GetServiceName(&proc)
 
 			standardConfig := &systemd.StandardConfig{
 				ServiceName: serviceName,
-				APIKey:      apiKey,
-				Target:      target,
-				AgentPath:   agentPath,
+				APIKey:      cfg.Middleware.APIKey,
+				Target:      cfg.Middleware.Target,
+				AgentPath:   installedPath,
 			}
 
 			err := systemd.CreateStandardConfig(configPath, standardConfig)
@@ -178,7 +185,7 @@ func (c *AutoInstrumentCommand) Execute() error {
 				ServiceName: systemdServiceName,
 				ConfigPath:  configPath,
 				IsTomcat:    false,
-				AgentPath:   agentPath,
+				AgentPath:   installedPath,
 			}
 
 			err = systemd.CreateDropIn(dropInConfig)
@@ -217,7 +224,7 @@ func (c *AutoInstrumentCommand) Execute() error {
 	fmt.Printf("   Total:      %d\n", len(processes))
 
 	// Restart services
-	if len(servicesToRestart) > 0 {
+	if len(servicesToRestart) > 0 && cfg.Instrumentation.RestartServices {
 		fmt.Printf("\n🔄 Restarting %d service(s)...\n\n", len(servicesToRestart))
 
 		systemd.ReloadSystemd()
@@ -235,6 +242,9 @@ func (c *AutoInstrumentCommand) Execute() error {
 			}
 		}
 		fmt.Println("\n✅ All services restarted!")
+	} else if len(servicesToRestart) > 0 {
+		fmt.Printf("\n⚠️  Service restart disabled in configuration\n")
+		fmt.Printf("   Manual restart required for: %v\n", servicesToRestart)
 	}
 
 	return nil
@@ -473,9 +483,25 @@ func (c *AutoInstrumentCommand) detectDeploymentType(proc *discovery.JavaProcess
 	return "standalone"
 }
 
-func (c *AutoInstrumentCommand) generateServiceName(proc *discovery.JavaProcess) string {
-	// Use the naming package
-	return naming.GenerateServiceName(proc)
+// generateServiceNameFromConfig generates service name with configuration overrides
+func (c *AutoInstrumentCommand) generateServiceNameFromConfig(proc *discovery.JavaProcess, cfg *config.Config) string {
+	baseName := naming.GenerateServiceName(proc)
+
+	// Apply prefix and suffix from configuration
+	if cfg.Service.NamePrefix != "" {
+		baseName = cfg.Service.NamePrefix + "-" + baseName
+	}
+
+	if cfg.Service.NameSuffix != "" {
+		baseName = baseName + "-" + cfg.Service.NameSuffix
+	}
+
+	// Include hostname if configured
+	if cfg.Host.IncludeHostname {
+		baseName = baseName + "@" + cfg.Host.Hostname
+	}
+
+	return baseName
 }
 
 func (c *AutoInstrumentCommand) fileExists(path string) bool {
@@ -488,4 +514,3 @@ func (c *AutoInstrumentCommand) getSystemdServiceName(proc *discovery.JavaProces
 	return systemd.GetServiceName(proc)
 }
 
-// Remove the TODO placeholder functions - they're now implemented in systemd package
