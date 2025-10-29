@@ -187,6 +187,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Built with ❤️  and way too much nicotine at 3:25 AM**
+**Built with ❤️  and way too much nicotine on sleepless nights**
 
 *Making Java instrumentation suck less, one process at a time.*
