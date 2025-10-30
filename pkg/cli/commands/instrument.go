@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/agent"
 	"github.com/middleware-labs/java-injector/pkg/cli/types"
 	"github.com/middleware-labs/java-injector/pkg/config"
@@ -89,10 +90,12 @@ func (c *AutoInstrumentCommand) Execute() error {
 
 	for _, proc := range processes {
 		// Check if agent is accessible by systemd for this specific process
+		pp.Println(agentPath)
 		if err := agent.CheckAccessibleBySystemd(agentPath, proc.ProcessOwner); err != nil {
 			fmt.Printf("❌ Skipping PID %d (%s) due to a permission issue.\n", proc.ProcessPID, proc.ServiceName)
 			fmt.Printf("   └── Reason: The service user '%s' cannot access the agent file within the systemd security context.\n", proc.ProcessOwner)
 			fmt.Printf("   └── To fix, check file permissions and SELinux/AppArmor policies.\n\n")
+			fmt.Println("err:", err)
 			skipped++
 			continue
 		}
@@ -538,7 +541,7 @@ func NewConfigAutoInstrumentCommand(config *types.CommandConfig, configPath stri
 
 func (c *ConfigAutoInstrumentCommand) Execute() error {
 	ctx := context.Background()
-
+	pp.Println(c.config)
 	// Check if running as root
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("❌ This command requires root privileges\n   Run with: sudo mw-injector auto-instrument-config [config-file]")
@@ -570,6 +573,8 @@ func (c *ConfigAutoInstrumentCommand) Execute() error {
 	if agentPath == "" {
 		agentPath = c.config.DefaultAgentPath
 	}
+
+	skipSECheck := configVars["SKIP_SE_CHECK"]
 
 	fmt.Printf("🔧 Using configuration from: %s\n", c.configPath)
 	fmt.Printf("   API Key: %s...\n", apiKey[:min(8, len(apiKey))])
@@ -605,11 +610,18 @@ func (c *ConfigAutoInstrumentCommand) Execute() error {
 	var servicesToRestart []string
 
 	for _, proc := range processes {
+
+		pp.Println("---------------------AGENTPATH: ", agentPath)
 		// Check if agent is accessible by systemd for this specific process
-		if err := agent.CheckAccessibleBySystemd(agentPath, proc.ProcessOwner); err != nil {
+		if _, err := os.Stat(agentPath); err != nil {
+			fmt.Printf("agent file does not exist: %s", agentPath)
+			continue
+		}
+		if err := agent.CheckAccessibleBySystemd(agentPath, proc.ProcessOwner); err != nil && skipSECheck != "true" {
 			fmt.Printf("❌ Skipping PID %d (%s) due to a permission issue.\n", proc.ProcessPID, proc.ServiceName)
 			fmt.Printf("   └── Reason: The service user '%s' cannot access the agent file within the systemd security context.\n", proc.ProcessOwner)
 			fmt.Printf("   └── To fix, check file permissions and SELinux/AppArmor policies.\n\n")
+			// fmt.Println("", err)
 			skipped++
 			continue
 		}

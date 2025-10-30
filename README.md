@@ -18,23 +18,6 @@ sudo mw-injector instrument-docker
 
 # List instrumented containers
 sudo mw-injector list-docker
-
-# Config-based mode (no prompts, uses saved config)
-sudo mw-injector auto-instrument-config
-
-# Auto-instrument Docker containers
-sudo mw-injector instrument-docker-config
-```
-## 🔧 Configuration File
-
-Create a config file to avoid repetitive API key prompts and enable fully automated instrumentation:
-```bash
-# Create system-wide config
-sudo tee /etc/mw-injector.conf << EOF
-MW_API_KEY=your_middleware_api_key_here
-MW_TARGET=https://prod.middleware.io:443
-MW_JAVA_AGENT_PATH=/opt/middleware/agents/middleware-javaagent-1.8.1.jar
-EOF
 ```
 
 That's it. Your Java apps are now sending telemetry data to Middleware.io.
