@@ -31,8 +31,6 @@ func CheckAccessibleBySystemd(agentPath string, username string) error {
 		"--service-type=oneshot",
 		"test", "-r", agentPath)
 	if err := cmd.Run(); err != nil {
-		// pp.Println("err", err)
-		// pp.Println(cmd)
 		return fmt.Errorf("systemd security context blocks access, ")
 	}
 	return nil

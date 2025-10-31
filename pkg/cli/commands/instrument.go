@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/k0kubun/pp"
+
 	"github.com/middleware-labs/java-injector/pkg/agent"
 	"github.com/middleware-labs/java-injector/pkg/cli/types"
 	"github.com/middleware-labs/java-injector/pkg/config"
@@ -90,7 +91,11 @@ func (c *AutoInstrumentCommand) Execute() error {
 
 	for _, proc := range processes {
 		// Check if agent is accessible by systemd for this specific process
-		pp.Println(agentPath)
+		if _, err := os.Stat(agentPath); err != nil {
+			pp.Printf("❌ agent file does not exist: %s\n", agentPath)
+			skipped++
+			continue
+		}
 		if err := agent.CheckAccessibleBySystemd(agentPath, proc.ProcessOwner); err != nil {
 			fmt.Printf("❌ Skipping PID %d (%s) due to a permission issue.\n", proc.ProcessPID, proc.ServiceName)
 			fmt.Printf("   └── Reason: The service user '%s' cannot access the agent file within the systemd security context.\n", proc.ProcessOwner)
@@ -213,7 +218,11 @@ func (c *AutoInstrumentCommand) Execute() error {
 		fmt.Println()
 	}
 
-	fmt.Printf("\n🎉 Auto-instrumentation complete!\n")
+	if skipped > 0 {
+		fmt.Printf("\n Auto-instrumentation complete! Skipped %d services \n", skipped)
+	} else if skipped == 0 {
+		fmt.Printf("\n🎉 Auto-instrumentation complete!\n")
+	}
 	fmt.Printf("   Configured: %d\n", configured)
 	fmt.Printf("   Updated:    %d\n", updated)
 	fmt.Printf("   Skipped:    %d\n", skipped)
@@ -338,6 +347,12 @@ func (c *InstrumentDockerCommand) Execute() error {
 		cfg.MWTarget = target
 		cfg.MWServiceName = container.GetServiceName()
 		cfg.JavaAgentPath = docker.DefaultContainerAgentPath
+
+		if _, err := os.Stat(agentPath); err != nil {
+			pp.Printf("❌ agent file does not exist: %s\n", agentPath)
+			skipped++
+			continue
+		}
 
 		// Instrument container
 		err := dockerOps.InstrumentContainer(container.ContainerName, &cfg)
@@ -541,7 +556,6 @@ func NewConfigAutoInstrumentCommand(config *types.CommandConfig, configPath stri
 
 func (c *ConfigAutoInstrumentCommand) Execute() error {
 	ctx := context.Background()
-	pp.Println(c.config)
 	// Check if running as root
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("❌ This command requires root privileges\n   Run with: sudo mw-injector auto-instrument-config [config-file]")
@@ -611,10 +625,10 @@ func (c *ConfigAutoInstrumentCommand) Execute() error {
 
 	for _, proc := range processes {
 
-		pp.Println("---------------------AGENTPATH: ", agentPath)
 		// Check if agent is accessible by systemd for this specific process
 		if _, err := os.Stat(agentPath); err != nil {
-			fmt.Printf("agent file does not exist: %s", agentPath)
+			pp.Printf("❌ agent file does not exist: %s\n", agentPath)
+			skipped++
 			continue
 		}
 		if err := agent.CheckAccessibleBySystemd(agentPath, proc.ProcessOwner); err != nil && skipSECheck != "true" {
@@ -734,7 +748,12 @@ func (c *ConfigAutoInstrumentCommand) Execute() error {
 		fmt.Println()
 	}
 
-	fmt.Printf("\n🎉 Auto-instrumentation complete!\n")
+	if skipped > 0 {
+		fmt.Printf("\n Auto-instrumentation complete! Skipped %d services\n", skipped)
+	} else if skipped == 0 {
+		fmt.Printf("\n🎉 Auto-instrumentation complete!\n")
+	}
+
 	fmt.Printf("   Configured: %d\n", configured)
 	fmt.Printf("   Updated:    %d\n", updated)
 	fmt.Printf("   Skipped:    %d\n", skipped)
@@ -870,7 +889,11 @@ func (c *ConfigInstrumentDockerCommand) Execute() error {
 			fmt.Printf("   📝 Auto-configuring for instrumentation...\n")
 			configured++
 		}
-
+		if _, err := os.Stat(agentPath); err != nil {
+			pp.Printf("❌ agent file does not exist: %s", agentPath)
+			skipped++
+			continue
+		}
 		// Create configuration
 		cfg := config.DefaultConfiguration()
 		cfg.MWAPIKey = apiKey
