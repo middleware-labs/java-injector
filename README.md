@@ -21,9 +21,12 @@ sudo mw-injector list-docker
 ```
 
 # Config-based mode (no prompts, uses saved config)
+```
 sudo mw-injector auto-instrument-config
+```
 
 # Auto-instrument Docker containers
+```
 sudo mw-injector instrument-docker-config
 ```
 ## 🔧 Configuration File
