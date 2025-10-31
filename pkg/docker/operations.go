@@ -947,51 +947,6 @@ func (cm *ComposeModifier) ValidateComposeFile() error {
 	return err
 }
 
-// recreateComposeService recreates a Docker Compose service
-// func (do *DockerOperations) recreateComposeService(container *discovery.DockerContainer) error {
-// 	if container.ComposeWorkDir == "" {
-// 		return fmt.Errorf("compose working directory not found")
-// 	}
-
-// 	// Change to compose directory
-// 	originalDir, _ := os.Getwd()
-// 	defer os.Chdir(originalDir)
-
-// 	if err := os.Chdir(container.ComposeWorkDir); err != nil {
-// 		return err
-// 	}
-
-// 	// Run docker-compose up -d for specific service
-// 	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", container.ComposeService)
-// 	return cmd.Run()
-// }
-
-// func (do *DockerOperations) recreateComposeService(container *discovery.DockerContainer) error {
-// 	if container.ComposeWorkDir == "" {
-// 		return fmt.Errorf("compose working directory not found")
-// 	}
-
-// 	originalDir, _ := os.Getwd()
-// 	defer os.Chdir(originalDir)
-
-// 	if err := os.Chdir(container.ComposeWorkDir); err != nil {
-// 		return err
-// 	}
-
-// 	// DEBUG: Show what directory we're in and what files exist
-// 	pp.Printf("   Working directory: %s\n", container.ComposeWorkDir)
-
-// 	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", container.ComposeService)
-
-// 	// Capture both stdout and stderr
-// 	output, err := cmd.CombinedOutput()
-// 	if err != nil {
-// 		pp.Printf("   Docker-compose error output: %s\n", string(output))
-// 		return err
-// 	}
-
-//		return nil
-//	}
 func (do *DockerOperations) recreateComposeService(container *discovery.DockerContainer) error {
 	if container.ComposeWorkDir == "" {
 		return fmt.Errorf("compose working directory not found")
