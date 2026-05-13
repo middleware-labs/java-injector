@@ -104,6 +104,11 @@ type Process struct {
 	// Language-specific metadata. Each handler populates the keys it needs
 	// during enrichment. Use the Detail* helper methods for typed access.
 	Details map[string]any `json:"details,omitempty"`
+
+	// fingerprintParts is set by the handler during Enrich to provide
+	// language-specific identity parts for Fingerprint(). When nil,
+	// Fingerprint falls back to the legacy per-language switch.
+	fingerprintParts func(*Process) []string
 }
 
 // IsInContainer returns true if this process is running inside a container.
@@ -151,6 +156,25 @@ func (p *Process) Fingerprint() string {
 		parts = append(parts, p.ContainerInfo.ContainerName)
 	}
 
+	if p.fingerprintParts != nil {
+		parts = append(parts, p.fingerprintParts(p)...)
+	} else {
+		parts = append(parts, legacyFingerprintParts(p)...)
+	}
+
+	if cwd := p.DetailString(DetailWorkingDirectory); cwd != "" {
+		parts = append(parts, cwd)
+	}
+
+	sort.Strings(parts[1:])
+	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(h[:8])
+}
+
+// legacyFingerprintParts provides the per-language identity parts for
+// Process structs constructed without a handler (e.g. in tests).
+func legacyFingerprintParts(p *Process) []string {
+	var parts []string
 	switch p.Language {
 	case LangJava:
 		if jar := p.DetailString(DetailJarFile); jar != "" {
@@ -195,14 +219,7 @@ func (p *Process) Fingerprint() string {
 			parts = append(parts, ep)
 		}
 	}
-
-	if cwd := p.DetailString(DetailWorkingDirectory); cwd != "" {
-		parts = append(parts, cwd)
-	}
-
-	sort.Strings(parts[1:])
-	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(h[:8])
+	return parts
 }
 
 // DetailString returns the string value for a detail key, or "" if missing or wrong type.

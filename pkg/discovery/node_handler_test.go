@@ -45,7 +45,7 @@ func TestExtractNodeInfoPackageJson(t *testing.T) {
 		},
 	}
 
-	h := &NodeHandler{}
+	h := NewNodeHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -85,7 +85,7 @@ func TestExtractNodeInfoPackageJson(t *testing.T) {
 func TestExtractNodeInfoNoPackageJson(t *testing.T) {
 	dir := t.TempDir()
 
-	h := &NodeHandler{}
+	h := NewNodeHandler()
 	proc := &Process{
 		PID:            99999,
 		ExecutablePath: "/usr/bin/node",
@@ -107,7 +107,7 @@ func TestExtractNodeInfoNoPackageJson(t *testing.T) {
 }
 
 func TestNodeToServiceSettingServiceType(t *testing.T) {
-	h := &NodeHandler{}
+	h := NewNodeHandler()
 
 	// Use a fake PID that won't match any real systemd cgroup, so
 	// CheckSystemdStatus returns (false, "") → serviceType = "system".

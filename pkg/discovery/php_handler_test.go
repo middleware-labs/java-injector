@@ -66,7 +66,7 @@ func TestPHPHandler_Detect(t *testing.T) {
 		{"dotnet (PeachPie)", "dotnet", false},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &ProcessInfo{ExeName: tt.exeName}
@@ -341,7 +341,7 @@ func TestPHPHandler_ExtractPHPInfoBuiltinServer(t *testing.T) {
 		},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &Process{
@@ -467,7 +467,7 @@ func TestPHPHandler_ExtractPHPInfoSubcommand(t *testing.T) {
 		},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &Process{
@@ -516,7 +516,7 @@ func TestPHPHandler_IsVendorPath(t *testing.T) {
 // Catches the "illuminate-foundation" bug from Laravel's built-in dev server.
 
 func TestPHPHandler_ExtractPHPInfoVendorPath(t *testing.T) {
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	proc := &Process{
 		PID:      99999,
 		Language: LangPHP,
@@ -605,7 +605,7 @@ func TestPHPHandler_ExtractPHPInfoComposerJson(t *testing.T) {
 		},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -750,7 +750,7 @@ func TestPHPHandler_ExtractServiceName(t *testing.T) {
 		},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &Process{
@@ -794,7 +794,7 @@ func TestPHPHandler_ServiceNameFromComposer(t *testing.T) {
 		},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -851,7 +851,7 @@ func TestPHPHandler_DetectInstrumentation(t *testing.T) {
 		},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &Process{
@@ -1062,7 +1062,7 @@ func TestPHPHandler_DetectInRegistry(t *testing.T) {
 // path for real production PHP deployment patterns.
 
 func TestPHPHandler_RealWorldScenarios(t *testing.T) {
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 
 	tests := []struct {
 		name        string
@@ -1226,7 +1226,7 @@ func TestPHPHandler_FPMPoolServiceName(t *testing.T) {
 		{"staging pool", "staging", "staging"},
 	}
 
-	h := &PHPHandler{}
+	h := NewPHPHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &Process{

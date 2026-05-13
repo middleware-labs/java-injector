@@ -42,30 +42,22 @@ func ReportStatusWithLogger(
 }
 
 func InstrumentUnit(unitName string, lang Language) error {
+	meta, ok := languageMeta[lang]
+	if !ok || !meta.SupportsSystemdDropin {
+		return fmt.Errorf("unsupported language %s", lang)
+	}
+	if meta.ValidateAgent != nil {
+		if err := meta.ValidateAgent(""); err != nil {
+			return err
+		}
+	}
+
 	dropIn, err := NewSystemdDropin(unitName)
 	if err != nil {
 		return fmt.Errorf("failed to create systemd dropin: %w", err)
 	}
 
-	switch lang {
-	case LanguageJava:
-		if status := ValidateJavaAgent(""); !status.Ready {
-			return fmt.Errorf("java agent is not ready, %v", status.Errors)
-		}
-		return dropIn.applySystemdDropIn()
-	case LanguagePython:
-		if status := ValidatePythonAgent(""); !status.Ready {
-			return fmt.Errorf("python agent is not ready, %v", status.Errors)
-		}
-		return dropIn.applySystemdDropInPython()
-	case LanguageNode:
-		if status := ValidateNodeAgent(""); !status.Ready {
-			return fmt.Errorf("node agent is not ready, %v", status.Errors)
-		}
-		return dropIn.applySystemdDropIn()
-	default:
-		return fmt.Errorf("unsupported language %s", lang)
-	}
+	return meta.InstrumentDropin(dropIn)
 }
 
 func UninstrumentUnit(unitName string) error {

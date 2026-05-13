@@ -32,6 +32,12 @@ type LanguageHandler interface {
 	// for reporting to the backend. Returns nil to exclude from the report
 	// (e.g. Tomcat processes in Java are excluded).
 	ToServiceSetting(proc *Process) *ServiceSetting
+
+	// FingerprintParts returns the language-specific identity parts used
+	// to compute a workload fingerprint. Common parts (language, systemd
+	// unit, container name, working directory) are added by Fingerprint()
+	// itself — handlers only return the language-specific signals.
+	FingerprintParts(proc *Process) []string
 }
 
 // HandlerRegistry holds all registered LanguageHandlers and provides lookup
@@ -47,13 +53,13 @@ type HandlerRegistry struct {
 func NewHandlerRegistry() *HandlerRegistry {
 	return &HandlerRegistry{
 		handlers: []LanguageHandler{
-			&JavaHandler{},
-			&NodeHandler{},
-			&PythonHandler{},
-			&RubyHandler{},
-			&GoHandler{},
-			&RustHandler{},
-			&PHPHandler{},
+			NewJavaHandler(),
+			NewNodeHandler(),
+			NewPythonHandler(),
+			NewRubyHandler(),
+			NewGoHandler(),
+			NewRustHandler(),
+			NewPHPHandler(),
 		},
 	}
 }

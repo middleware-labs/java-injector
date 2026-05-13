@@ -15,7 +15,29 @@ import (
 )
 
 // PHPHandler implements LanguageHandler for PHP processes.
-type PHPHandler struct{}
+type PHPHandler struct{ BaseHandler }
+
+func NewPHPHandler() *PHPHandler {
+	return &PHPHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:           LangPHP,
+		RuntimeName:        "php",
+		LanguageString:     "php",
+		RuntimeDescription: "PHP Runtime",
+		RuntimeNameFromCache: func(c ProcessCacheEntry) string {
+			return c.ServiceType
+		},
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailEntryPoint, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+			{DetailProcessManager, func(c ProcessCacheEntry) any { return c.ServiceType }},
+			{DetailPHPPoolName, func(c ProcessCacheEntry) any { return c.PackageName }},
+			{DetailIsFPM, func(c ProcessCacheEntry) any { return c.ServiceType == "php-fpm" }},
+		},
+		ExtraCacheWriter: func(proc *Process, entry *ProcessCacheEntry) {
+			entry.ServiceType = proc.RuntimeName
+			entry.PackageName = proc.DetailString(DetailPHPPoolName)
+		},
+	}}}
+}
 
 // Lang returns LangPHP.
 func (h *PHPHandler) Lang() Language { return LangPHP }
@@ -44,49 +66,15 @@ func (h *PHPHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *
 	createTime := readProcessCreateTime(pid)
 	alignedTime := (createTime / 1000) * 1000
 
-	// Cache fast path
 	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
 		if cached.Ignore {
 			return nil
 		}
-
-		status := readProcessStatus(pid)
-
-		return &Process{
-			PID:            pid,
-			ParentPID:      readProcessPPID(pid),
-			ExecutableName: info.ExeName,
-			ExecutablePath: info.ExePath,
-			CommandLine:    info.CmdLine,
-			Owner:          cached.Owner,
-			CreateTime:     timeFromMillis(createTime),
-			Status:         status,
-			Language:       LangPHP,
-
-			ServiceName:        cached.ServiceName,
-			RuntimeName:        cached.ServiceType,
-			RuntimeVersion:     cached.RuntimeVersion,
-			RuntimeDescription: "PHP Runtime",
-
-			HasAgent:          cached.HasAgent,
-			IsMiddlewareAgent: cached.IsMiddlewareAgent,
-			AgentPath:         cached.AgentPath,
-			AgentType:         cached.AgentType,
-			ContainerInfo:     cached.ContainerInfo,
-
-			Details: map[string]any{
-				DetailEntryPoint:          cached.EntryPoint,
-				DetailProcessManager:      cached.ServiceType,
-				DetailSystemdUnit:         cached.SystemdUnit,
-				DetailExplicitServiceName: cached.ExplicitServiceName,
-				DetailWorkingDirectory:    cached.WorkingDirectory,
-				DetailPHPPoolName:         cached.PackageName,
-				DetailIsFPM:              cached.ServiceType == "php-fpm",
-			},
-		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
-	// Slow path
 	if isIgnoredSystemdUnit(pid) {
 		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
 		return nil
@@ -97,37 +85,11 @@ func (h *PHPHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *
 		return nil
 	}
 
-	status := readProcessStatus(pid)
-	runtimeName := classifyPHPRuntime(info.ExeName, pid)
+	proc := h.BuildProcess(info, owner, createTime, "unknown")
+	proc.RuntimeName = classifyPHPRuntime(info.ExeName, pid)
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    cmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangPHP,
-
-		RuntimeName:        runtimeName,
-		RuntimeVersion:     "unknown",
-		RuntimeDescription: "PHP Runtime",
-
-		Details: make(map[string]any),
-	}
-
-	// Container detection
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
 	h.extractPHPInfo(proc, cmdArgs)
@@ -143,77 +105,31 @@ func (h *PHPHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *
 	h.extractServiceName(proc)
 	h.detectInstrumentation(proc)
 
-	// Populate cache
-	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:         proc.ServiceName,
-		ServiceType:         proc.RuntimeName,
-		RuntimeVersion:      proc.RuntimeVersion,
-		EntryPoint:          proc.DetailString(DetailEntryPoint),
-		HasAgent:            proc.HasAgent,
-		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
-		AgentPath:           proc.AgentPath,
-		AgentType:           proc.AgentType,
-		ContainerInfo:       proc.ContainerInfo,
-		Owner:               proc.Owner,
-		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
-		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
-		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
-		PackageName:         proc.DetailString(DetailPHPPoolName),
-	})
+	CacheProcessMetadata(pid, alignedTime, h.WriteCacheEntry(proc))
 
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
-// PassesFilter checks simple owner-based filtering for PHP processes.
 func (h *PHPHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return proc.Owner == currentUser()
-	}
-	return true
+	return h.DefaultPassesFilter(proc, filter)
 }
 
-// ToServiceSetting converts a PHP Process into a ServiceSetting for
-// backend reporting.
 func (h *PHPHandler) ToServiceSetting(proc *Process) *ServiceSetting {
-	key := fmt.Sprintf("host-php-%s", sanitize(proc.ServiceName))
-	unitname := proc.DetailString(DetailSystemdUnit)
-	serviceType := "system"
-	if unitname != "" {
-		serviceType = "systemd"
+	ss := h.BuildServiceSetting(proc)
+	ss.ProcessManager = proc.DetailString(DetailProcessManager)
+	return ss
+}
+
+func (h *PHPHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if pool := proc.DetailString(DetailPHPPoolName); pool != "" {
+		parts = append(parts, pool)
 	}
-
-	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("container-php-%s", proc.ContainerInfo.ContainerID[:12])
-		}
+	if ep := proc.DetailString(DetailEntryPoint); ep != "" {
+		parts = append(parts, ep)
 	}
-
-	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
-
-	return &ServiceSetting{
-		PID:            proc.PID,
-		ServiceName:    proc.ServiceName,
-		Owner:          proc.Owner,
-		Status:         proc.Status,
-		Enabled:        true,
-		ServiceType:    serviceType,
-		Language:       "php",
-		RuntimeVersion: proc.RuntimeVersion,
-
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-
-		Key:            key,
-		ProcessManager: proc.DetailString(DetailProcessManager),
-		SystemdUnit:    unitname,
-		Listeners:        proc.Listeners(),
-		Fingerprint:      proc.Fingerprint(),
-		IntegrationType:  proc.IntegrationType(),
-	}
+	return parts
 }
 
 // --- Private helpers ---

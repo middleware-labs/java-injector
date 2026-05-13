@@ -30,7 +30,7 @@ func TestJavaHandlerDetect(t *testing.T) {
 		},
 	}
 
-	handler := &JavaHandler{}
+	handler := NewJavaHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ok := handler.Detect(&tt.proc)
@@ -74,7 +74,7 @@ func TestNodeHandlerDetect(t *testing.T) {
 		},
 	}
 
-	handler := &NodeHandler{}
+	handler := NewNodeHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ok := handler.Detect(&tt.proc)
@@ -143,7 +143,7 @@ func TestPythonHandlerDetect(t *testing.T) {
 		},
 	}
 
-	handler := &PythonHandler{}
+	handler := NewPythonHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ok := handler.Detect(&tt.proc)

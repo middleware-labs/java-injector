@@ -26,7 +26,19 @@ const (
 // stamps and mangled symbol names — applied in cheapest-first order with
 // explicit guards against C++/Rust hybrid binaries (browsers, Electron apps)
 // that ship Rust components but aren't Rust applications.
-type RustHandler struct{}
+type RustHandler struct{ BaseHandler }
+
+func NewRustHandler() *RustHandler {
+	return &RustHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:           LangRust,
+		RuntimeName:        "rust",
+		RuntimeDescription: "Rust Native Binary",
+		ContainerKeyPrefix: "docker",
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailEntryPoint, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+		},
+	}}}
+}
 
 func (h *RustHandler) Lang() Language { return LangRust }
 
@@ -36,7 +48,6 @@ func (h *RustHandler) Detect(proc *ProcessInfo) bool {
 
 func (h *RustHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *ContainerDetector) *Process {
 	pid := info.PID
-	cmdArgs := info.CmdArgs
 
 	owner := readProcessOwner(pid)
 	createTime := readProcessCreateTime(pid)
@@ -46,37 +57,9 @@ func (h *RustHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 		if cached.Ignore {
 			return nil
 		}
-
-		status := readProcessStatus(pid)
-
-		return &Process{
-			PID:            pid,
-			ParentPID:      readProcessPPID(pid),
-			ExecutableName: info.ExeName,
-			ExecutablePath: info.ExePath,
-			CommandLine:    info.CmdLine,
-			Owner:          cached.Owner,
-			CreateTime:     timeFromMillis(createTime),
-			Status:         status,
-			Language:       LangRust,
-
-			ServiceName:        cached.ServiceName,
-			RuntimeName:        "rust",
-			RuntimeDescription: "Rust Native Binary",
-
-			HasAgent:          cached.HasAgent,
-			IsMiddlewareAgent: cached.IsMiddlewareAgent,
-			AgentPath:         cached.AgentPath,
-			AgentType:         cached.AgentType,
-			ContainerInfo:     cached.ContainerInfo,
-
-			Details: map[string]any{
-				DetailEntryPoint:          cached.EntryPoint,
-				DetailSystemdUnit:         cached.SystemdUnit,
-				DetailExplicitServiceName: cached.ExplicitServiceName,
-				DetailWorkingDirectory:    cached.WorkingDirectory,
-			},
-		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
 	if isIgnoredSystemdUnit(pid) {
@@ -84,34 +67,10 @@ func (h *RustHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 		return nil
 	}
 
-	status := readProcessStatus(pid)
+	proc := h.BuildProcess(info, owner, createTime, "")
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    cmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangRust,
-
-		RuntimeName:        "rust",
-		RuntimeDescription: "Rust Native Binary",
-
-		Details: make(map[string]any),
-	}
-
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
 	proc.Details[DetailEntryPoint] = info.ExeName
@@ -119,66 +78,28 @@ func (h *RustHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	h.extractServiceName(proc, info)
 	h.detectInstrumentation(proc)
 
-	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:         proc.ServiceName,
-		EntryPoint:          proc.DetailString(DetailEntryPoint),
-		HasAgent:            proc.HasAgent,
-		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
-		AgentPath:           proc.AgentPath,
-		AgentType:           proc.AgentType,
-		ContainerInfo:       proc.ContainerInfo,
-		Owner:               proc.Owner,
-		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
-		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
-		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
-	})
+	entry := h.WriteCacheEntry(proc)
+	entry.EntryPoint = proc.DetailString(DetailEntryPoint)
+	CacheProcessMetadata(pid, alignedTime, entry)
 
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
 func (h *RustHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return proc.Owner == currentUser()
-	}
-	return true
+	return h.DefaultPassesFilter(proc, filter)
 }
 
 func (h *RustHandler) ToServiceSetting(proc *Process) *ServiceSetting {
-	key := fmt.Sprintf("host-rust-%s", sanitize(proc.ServiceName))
-	unitname := proc.DetailString(DetailSystemdUnit)
-	serviceType := "system"
-	if unitname != "" {
-		serviceType = "systemd"
+	return h.BuildServiceSetting(proc)
+}
+
+func (h *RustHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if ep := proc.DetailString(DetailEntryPoint); ep != "" {
+		parts = append(parts, ep)
 	}
-
-	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("docker-rust-%s", proc.ContainerInfo.ContainerID[:12])
-		}
-	}
-
-	return &ServiceSetting{
-		PID:         proc.PID,
-		ServiceName: proc.ServiceName,
-		Owner:       proc.Owner,
-		Status:      proc.Status,
-		Enabled:     true,
-		ServiceType: serviceType,
-		Language:    "rust",
-
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         proc.AgentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-
-		Key:         key,
-		SystemdUnit: unitname,
-		Listeners:       proc.Listeners(),
-		Fingerprint:     proc.Fingerprint(),
-		IntegrationType: proc.IntegrationType(),
-	}
+	return parts
 }
 
 // --- Service name extraction ---

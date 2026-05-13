@@ -16,7 +16,27 @@ import (
 // It detects CPython/PyPy processes and Python-based binaries (gunicorn,
 // uvicorn, celery), enriches them with module/entry point info, process
 // manager details, and instrumentation state.
-type PythonHandler struct{}
+type PythonHandler struct{ BaseHandler }
+
+func NewPythonHandler() *PythonHandler {
+	return &PythonHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:           LangPython,
+		RuntimeName:        "python",
+		RuntimeDescription: "Python Interpreter",
+		ContainerKeyPrefix: "docker",
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailEntryPoint, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+			{DetailProcessManager, func(c ProcessCacheEntry) any { return c.ServiceType }},
+			{DetailIsGunicorn, func(c ProcessCacheEntry) any { return c.ServiceType == "gunicorn" }},
+			{DetailIsUvicorn, func(c ProcessCacheEntry) any { return c.ServiceType == "uvicorn" }},
+			{DetailIsCelery, func(c ProcessCacheEntry) any { return c.ServiceType == "celery" }},
+			{DetailModulePath, func(c ProcessCacheEntry) any { return c.ModulePath }},
+		},
+		ExtraCacheWriter: func(proc *Process, entry *ProcessCacheEntry) {
+			entry.ModulePath = proc.DetailString(DetailModulePath)
+		},
+	}}}
+}
 
 // Lang returns LangPython.
 func (h *PythonHandler) Lang() Language { return LangPython }
@@ -60,88 +80,26 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 	createTime := readProcessCreateTime(pid)
 	alignedTime := (createTime / 1000) * 1000
 
-	// Cache fast path
 	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
 		if cached.Ignore {
 			return nil
 		}
-
-		status := readProcessStatus(pid)
-
-		return &Process{
-			PID:            pid,
-			ParentPID:      readProcessPPID(pid),
-			ExecutableName: info.ExeName,
-			ExecutablePath: info.ExePath,
-			CommandLine:    info.CmdLine,
-			Owner:          cached.Owner,
-			CreateTime:     timeFromMillis(createTime),
-			Status:         status,
-			Language:       LangPython,
-
-			ServiceName:        cached.ServiceName,
-			RuntimeName:        "python",
-			RuntimeVersion:     cached.RuntimeVersion,
-			RuntimeDescription: "Python Interpreter",
-
-			HasAgent:          cached.HasAgent,
-			IsMiddlewareAgent: cached.IsMiddlewareAgent,
-			AgentPath:         cached.AgentPath,
-			AgentType:         cached.AgentType,
-			ContainerInfo:     cached.ContainerInfo,
-
-			Details: map[string]any{
-				DetailEntryPoint:          cached.EntryPoint,
-				DetailProcessManager:      cached.ServiceType,
-				DetailIsGunicorn:          cached.ServiceType == "gunicorn",
-				DetailIsUvicorn:           cached.ServiceType == "uvicorn",
-				DetailIsCelery:            cached.ServiceType == "celery",
-				DetailSystemdUnit:         cached.SystemdUnit,
-				DetailExplicitServiceName: cached.ExplicitServiceName,
-				DetailWorkingDirectory:    cached.WorkingDirectory,
-				DetailModulePath:          cached.ModulePath,
-			},
-		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
-	// Slow path
 	if isIgnoredSystemdUnit(pid) {
 		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
 		return nil
 	}
 
-	status := readProcessStatus(pid)
+	proc := h.BuildProcess(info, owner, createTime, "")
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    cmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangPython,
-
-		RuntimeName:        "python",
-		RuntimeDescription: "Python Interpreter",
-
-		Details: make(map[string]any),
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
-	// Container detection
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
-	}
-
-	// Skip multiprocessing sub-processes
 	isSubProcess := strings.Contains(info.CmdLine, "multiprocessing.spawn") ||
 		strings.Contains(info.CmdLine, "resource_tracker")
 	if isSubProcess {
@@ -155,80 +113,39 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 	h.detectProcessManager(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
 
-	// Populate cache
-	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:         proc.ServiceName,
-		ServiceType:         proc.DetailString(DetailProcessManager),
-		RuntimeVersion:      proc.RuntimeVersion,
-		EntryPoint:          proc.DetailString(DetailEntryPoint),
-		HasAgent:            proc.HasAgent,
-		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
-		AgentPath:           proc.AgentPath,
-		AgentType:           proc.AgentType,
-		ContainerInfo:       proc.ContainerInfo,
-		Owner:               proc.Owner,
-		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
-		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
-		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
-		ModulePath:          proc.DetailString(DetailModulePath),
-	})
+	CacheProcessMetadata(pid, alignedTime, h.WriteCacheEntry(proc))
 
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
-// PassesFilter checks simple owner-based filtering for Python processes.
 func (h *PythonHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return proc.Owner == currentUser()
-	}
-	return true
+	return h.DefaultPassesFilter(proc, filter)
 }
 
-// ToServiceSetting converts a Python Process into a ServiceSetting for
-// backend reporting.
 func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
-	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
-	unitname := proc.DetailString(DetailSystemdUnit)
-	serviceType := "system"
-	if unitname != "" {
-		serviceType = "systemd"
+	ss := h.BuildServiceSetting(proc)
+
+	ss.MainClass = proc.DetailString(DetailModulePath)
+	ss.JarFile = proc.DetailString(DetailEntryPoint)
+	ss.ProcessManager = proc.DetailString(DetailProcessManager)
+
+	if !proc.IsInContainer() && proc.DetailBool(DetailIsCelery) {
+		ss.ServiceType = "worker"
 	}
 
-	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("docker-python-%s", proc.ContainerInfo.ContainerID[:12])
-		}
-	} else if proc.DetailBool(DetailIsCelery) {
-		serviceType = "worker"
+	return ss
+}
+
+func (h *PythonHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if mp := proc.DetailString(DetailModulePath); mp != "" {
+		parts = append(parts, mp)
 	}
-
-	return &ServiceSetting{
-		PID:            proc.PID,
-		ServiceName:    proc.ServiceName,
-		Owner:          proc.Owner,
-		Status:         proc.Status,
-		Enabled:        true,
-		ServiceType:    serviceType,
-		Language:       "python",
-		RuntimeVersion: proc.RuntimeVersion,
-
-		MainClass: proc.DetailString(DetailModulePath),
-		JarFile:   proc.DetailString(DetailEntryPoint),
-
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         proc.AgentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-
-		Key:            key,
-		ProcessManager: proc.DetailString(DetailProcessManager),
-		SystemdUnit:    unitname,
-		Listeners:        proc.Listeners(),
-		Fingerprint:      proc.Fingerprint(),
-		IntegrationType:  proc.IntegrationType(),
+	if ep := proc.DetailString(DetailEntryPoint); ep != "" {
+		parts = append(parts, ep)
 	}
+	return parts
 }
 
 // --- Private helpers ---

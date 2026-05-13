@@ -3,7 +3,7 @@ package discovery
 import "testing"
 
 func TestRubyHandler_Detect(t *testing.T) {
-	h := &RubyHandler{}
+	h := NewRubyHandler()
 
 	positives := []ProcessInfo{
 		{PID: 1, ExeName: "ruby", ExePath: "/usr/bin/ruby", CmdLine: "ruby app.rb"},
@@ -40,7 +40,7 @@ func TestRubyHandler_Detect(t *testing.T) {
 }
 
 func TestRubyHandler_ExtractServiceName(t *testing.T) {
-	h := &RubyHandler{}
+	h := NewRubyHandler()
 
 	tests := []struct {
 		name string
@@ -113,7 +113,7 @@ func TestRubyHandler_ExtractServiceName(t *testing.T) {
 }
 
 func TestRubyHandler_DetectProcessManager(t *testing.T) {
-	h := &RubyHandler{}
+	h := NewRubyHandler()
 
 	tests := []struct {
 		name string
