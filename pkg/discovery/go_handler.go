@@ -189,6 +189,7 @@ func (h *GoHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		SystemdUnit:       unitname,
 		Listeners:         proc.Listeners(),
 		Fingerprint:       proc.Fingerprint(),
+		IntegrationType:   proc.IntegrationType(),
 	}
 }
 

@@ -18,6 +18,7 @@ type ServiceEntry struct {
 	Language        string
 	ServiceType     string // "systemd", "docker", "standalone"
 	SystemdUnit     string
+	IntegrationType string // "redis", "kafka", etc. — set for infra services
 	Ports           []int
 	Instances       []InstanceInfo
 	Instrumented    bool
@@ -128,13 +129,14 @@ func DiscoverServices(opts DiscoverServicesOpts) ([]ServiceEntry, error) {
 		sort.Ints(ports)
 
 		entry := ServiceEntry{
-			Fingerprint: fp,
-			ServiceName: s.ServiceName,
-			Language:    s.Language,
-			ServiceType: s.ServiceType,
-			SystemdUnit: s.SystemdUnit,
-			Ports:       ports,
-			Instances:   g.instances,
+			Fingerprint:     fp,
+			ServiceName:     s.ServiceName,
+			Language:        s.Language,
+			ServiceType:     s.ServiceType,
+			SystemdUnit:     s.SystemdUnit,
+			IntegrationType: s.IntegrationType,
+			Ports:           ports,
+			Instances:       g.instances,
 		}
 
 		// Check OBI instrumentation.

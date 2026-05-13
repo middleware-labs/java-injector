@@ -46,6 +46,7 @@ type ServiceSetting struct {
 	Listeners           []Listener `json:"listeners,omitempty"` // ports
 	InstrumentationType string     `json:"instrumentation_type,omitempty"`
 	Fingerprint         string             `json:"fingerprint,omitempty"`
+	IntegrationType     string             `json:"integration_type,omitempty"`
 	Instances           []ReportInstanceInfo `json:"instances,omitempty"`
 }
 

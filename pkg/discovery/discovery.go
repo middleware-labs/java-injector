@@ -251,6 +251,9 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 	InheritParentPorts(processes)
 	portsDuration := time.Since(portsStart)
 
+	// Classify known integrations now that ports are attached.
+	classifyIntegrations(processes)
+
 	// Batch-resolve container names via runtime API instead of per-process
 	// CLI calls. Uses the global name cache to avoid redundant lookups.
 	containerStart := time.Now()

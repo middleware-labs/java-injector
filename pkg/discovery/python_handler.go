@@ -222,8 +222,9 @@ func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Key:            key,
 		ProcessManager: proc.DetailString(DetailProcessManager),
 		SystemdUnit:    unitname,
-		Listeners:      proc.Listeners(),
-		Fingerprint:    proc.Fingerprint(),
+		Listeners:        proc.Listeners(),
+		Fingerprint:      proc.Fingerprint(),
+		IntegrationType:  proc.IntegrationType(),
 	}
 }
 
