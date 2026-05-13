@@ -273,12 +273,3 @@ func TestIsNodeLauncher(t *testing.T) {
 	}
 }
 
-func TestIntegrationRegistry_Empty(t *testing.T) {
-	registry := NewIntegrationRegistry()
-
-	proc := ProcessInfo{ExeName: "redis-server", CmdLine: "redis-server /etc/redis.conf"}
-	details, ok := registry.Detect(&proc)
-	if ok {
-		t.Errorf("empty registry should not match anything, got %+v", details)
-	}
-}

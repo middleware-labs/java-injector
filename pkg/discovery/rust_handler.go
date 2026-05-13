@@ -172,8 +172,9 @@ func (h *RustHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 
 		Key:         key,
 		SystemdUnit: unitname,
-		Listeners:   proc.Listeners(),
-		Fingerprint: proc.Fingerprint(),
+		Listeners:       proc.Listeners(),
+		Fingerprint:     proc.Fingerprint(),
+		IntegrationType: proc.IntegrationType(),
 	}
 }
 

@@ -53,6 +53,10 @@ const (
 	DetailListeners           = "listeners" // []Listener — TCP/UDP sockets the process is listening on
 	DetailSystemdUnit         = "systemd_unit"
 	DetailExplicitServiceName = "explicit_service_name"
+
+	// Integration detail key — set by classifyIntegrations() for known
+	// infrastructure services (Redis, MySQL, Kafka, etc.)
+	DetailIntegrationType = "integration_type"
 )
 
 // Process represents a discovered process of any supported language.
@@ -236,6 +240,12 @@ func (p *Process) Listeners() []Listener {
 		return nil
 	}
 	return v
+}
+
+// IntegrationType returns the classified integration type for this process
+// (e.g. "redis", "kafka"), or "" if not classified as a known integration.
+func (p *Process) IntegrationType() string {
+	return p.DetailString(DetailIntegrationType)
 }
 
 // DetailStringSlice returns the []string value for a detail key, or nil if missing.

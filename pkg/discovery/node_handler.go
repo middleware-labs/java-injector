@@ -201,6 +201,7 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		SystemdUnit:       unitname,
 		Listeners:         proc.Listeners(),
 		Fingerprint:       proc.Fingerprint(),
+		IntegrationType:   proc.IntegrationType(),
 	}
 }
 
