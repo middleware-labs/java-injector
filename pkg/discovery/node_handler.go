@@ -164,9 +164,9 @@ func (h *NodeHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
 // backend reporting.
 func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	unitname := proc.DetailString(DetailSystemdUnit)
 	serviceType := "system"
-	if isSystemd {
+	if unitname != "" {
 		serviceType = "systemd"
 	}
 

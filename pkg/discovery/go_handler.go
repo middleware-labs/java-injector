@@ -153,9 +153,9 @@ func (h *GoHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
 // ToServiceSetting converts a Go Process into a ServiceSetting for backend reporting.
 func (h *GoHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	key := fmt.Sprintf("host-go-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	unitname := proc.DetailString(DetailSystemdUnit)
 	serviceType := "system"
-	if isSystemd {
+	if unitname != "" {
 		serviceType = "systemd"
 	}
 

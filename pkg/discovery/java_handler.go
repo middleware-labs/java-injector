@@ -53,8 +53,43 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	createTime := readProcessCreateTime(pid)
 	alignedTime := (createTime / 1000) * 1000
 
-	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit && cached.Ignore {
-		return nil
+	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
+		if cached.Ignore {
+			return nil
+		}
+
+		status := readProcessStatus(pid)
+
+		return &Process{
+			PID:            pid,
+			ParentPID:      readProcessPPID(pid),
+			ExecutableName: info.ExeName,
+			ExecutablePath: info.ExePath,
+			Command:        info.CmdLine,
+			CommandLine:    info.CmdLine,
+			Owner:          cached.Owner,
+			CreateTime:     timeFromMillis(createTime),
+			Status:         status,
+			Language:       LangJava,
+
+			ServiceName:        cached.ServiceName,
+			RuntimeName:        "java",
+			RuntimeVersion:     cached.RuntimeVersion,
+			RuntimeDescription: "Java Virtual Machine",
+
+			HasAgent:          cached.HasAgent,
+			IsMiddlewareAgent: cached.IsMiddlewareAgent,
+			AgentPath:         cached.AgentPath,
+			AgentType:         cached.AgentType,
+			ContainerInfo:     cached.ContainerInfo,
+
+			Details: map[string]any{
+				DetailJarFile:             cached.EntryPoint,
+				DetailSystemdUnit:         cached.SystemdUnit,
+				DetailExplicitServiceName: cached.ExplicitServiceName,
+				DetailWorkingDirectory:    cached.WorkingDirectory,
+			},
+		}
 	}
 
 	if isIgnoredSystemdUnit(pid) {
@@ -101,6 +136,21 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	h.extractServiceName(proc, cmdArgs)
 	h.detectTomcat(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
+
+	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
+		ServiceName:         proc.ServiceName,
+		RuntimeVersion:      proc.RuntimeVersion,
+		EntryPoint:          proc.DetailString(DetailJarFile),
+		HasAgent:            proc.HasAgent,
+		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
+		AgentPath:           proc.AgentPath,
+		AgentType:           proc.AgentType,
+		ContainerInfo:       proc.ContainerInfo,
+		Owner:               proc.Owner,
+		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
+		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
+		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
+	})
 
 	return proc
 }
@@ -152,7 +202,7 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	}
 
 	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	unitname := proc.DetailString(DetailSystemdUnit)
 
 	deploymentType := "standalone"
 	if proc.IsInContainer() {
@@ -160,7 +210,7 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
 			key = fmt.Sprintf("docker-java-%s", proc.ContainerInfo.ContainerID[:12])
 		}
-	} else if isSystemd {
+	} else if unitname != "" {
 		deploymentType = "systemd"
 	}
 
@@ -391,6 +441,8 @@ func extractFromJavaSystemProperties(cmdArgs []string) string {
 	return ""
 }
 
+var camelCaseSplitter = regexp.MustCompile(`([a-z])([A-Z])`)
+
 var jarVersionPatterns = []struct {
 	re  *regexp.Regexp
 	rep string
@@ -441,8 +493,7 @@ func extractNameFromMainClass(mainClass string) string {
 		className = strings.TrimSuffix(className, s)
 	}
 
-	re := regexp.MustCompile(`([a-z])([A-Z])`)
-	className = re.ReplaceAllString(className, "${1}-${2}")
+	className = camelCaseSplitter.ReplaceAllString(className, "${1}-${2}")
 
 	return cleanName(className)
 }

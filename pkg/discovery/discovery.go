@@ -103,9 +103,9 @@ type discoverer struct {
 	allProcesses      []ProcessInfo // scanned once via ScanProcesses()
 }
 
-// NewDiscoverer creates a new process discoverer with default options.
+// NewDiscoverer creates a new process discoverer with the given options.
 func NewDiscoverer(ctx context.Context, opts DiscoveryOptions) (*discoverer, error) {
-	return NewDiscovererWithOptions(ctx, DefaultDiscoveryOptions())
+	return NewDiscovererWithOptions(ctx, opts)
 }
 
 // NewDiscovererWithOptions creates a new process discoverer with custom options.

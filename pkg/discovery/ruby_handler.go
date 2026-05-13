@@ -155,9 +155,9 @@ func (h *RubyHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
 
 func (h *RubyHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	key := fmt.Sprintf("host-ruby-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	unitname := proc.DetailString(DetailSystemdUnit)
 	serviceType := "system"
-	if isSystemd {
+	if unitname != "" {
 		serviceType = "systemd"
 	}
 

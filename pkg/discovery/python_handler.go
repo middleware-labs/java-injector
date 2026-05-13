@@ -131,10 +131,13 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 	}
 
 	// Container detection
-	if opts.IncludeContainerInfo {
+	if opts.IncludeContainerInfo || opts.ExcludeContainers {
 		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil && containerInfo.IsContainer {
+		if err == nil {
 			proc.ContainerInfo = containerInfo
+			if opts.ExcludeContainers && containerInfo.IsContainer {
+				return nil
+			}
 		}
 	}
 
@@ -185,9 +188,9 @@ func (h *PythonHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
 // backend reporting.
 func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	unitname := proc.DetailString(DetailSystemdUnit)
 	serviceType := "system"
-	if isSystemd {
+	if unitname != "" {
 		serviceType = "systemd"
 	}
 
