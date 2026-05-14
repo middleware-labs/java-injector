@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/middleware-labs/java-injector/pkg/discovery"
-	"github.com/middleware-labs/java-injector/pkg/naming"
+	"github.com/middleware-labs/java-injector/pkg/javanaming"
 )
 
 // GetServiceName tries to find the actual systemd service name for a Java process
@@ -36,7 +36,7 @@ func GetServiceName(proc *discovery.Process) string {
 	}
 
 	// Fallback: try common service name patterns
-	serviceName := naming.GenerateServiceName(proc)
+	serviceName := javanaming.GenerateServiceName(proc)
 	possibleNames := []string{
 		"spring-boot.service",
 		serviceName + ".service",

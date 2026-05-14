@@ -84,8 +84,8 @@ go test -v ./pkg/otelinject -run TestOBI
   - `injector_python.go` — `PythonSystemdInjector` (embeds base, uses `applySystemdDropInPython`, dedup-by-unit)
   - `validate.go` — Agent asset validation + libc flavor detection
 - **pkg/systemd/** — Systemd service management (status, restart, drop-in cleanup)
-- **pkg/naming/** — Java-specific service name generation (JAR cleaning, Tomcat instance naming, generic name filtering)
-- **pkg/reporter/** — Middleware.io backend API client (syncs discovery results to backend)
+- **pkg/javanaming/** — Java-specific service name generation (JAR cleaning, Tomcat instance naming, generic name filtering)
+- **pkg/mwclient/** — Middleware.io backend API client (syncs discovery results to backend)
 
 ### Key Patterns
 

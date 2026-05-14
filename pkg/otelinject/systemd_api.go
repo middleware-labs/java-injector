@@ -10,7 +10,7 @@ import (
 	"runtime"
 
 	"github.com/middleware-labs/java-injector/pkg/discovery"
-	"github.com/middleware-labs/java-injector/pkg/reporter"
+	"github.com/middleware-labs/java-injector/pkg/mwclient"
 )
 
 func ReportStatus(
@@ -34,7 +34,7 @@ func ReportStatusWithLogger(
 	infraPlatform string,
 	logger *slog.Logger,
 ) error {
-	r, err := reporter.New(hostname, apiKey, urlForConfigCheck, version, infraPlatform)
+	r, err := mwclient.New(hostname, apiKey, urlForConfigCheck, version, infraPlatform)
 	if err != nil {
 		return err
 	}

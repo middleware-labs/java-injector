@@ -1,4 +1,4 @@
-package naming
+package javanaming
 
 import (
 	"path/filepath"

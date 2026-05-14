@@ -1,8 +1,8 @@
-// Package naming provides service name generation with sanitization rules.
-// It derives a human-readable service name from a discovered process using
-// a multi-level heuristic (container name, env vars, systemd unit, JAR
-// filename, directory structure).
-package naming
+// Package javanaming provides Java-specific service name generation with
+// sanitization rules. It derives a human-readable service name from a
+// discovered Java process using JAR filename cleaning, Tomcat instance
+// naming, and generic name filtering.
+package javanaming
 
 import (
 	"fmt"
