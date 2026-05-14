@@ -20,3 +20,12 @@ const (
 	LanguageRuby   Language = "ruby"
 )
 
+// OtelInjector defines the contract for language-specific systemd injectors.
+// Used by mw-agent to handle Java/Node/Python injectors polymorphically.
+type OtelInjector interface {
+	ValidateAssets(baseDir string) bool
+	Instrument() error
+	Uninstrument() error
+	InstrumentService(discovery.ServiceSetting) error
+}
+
