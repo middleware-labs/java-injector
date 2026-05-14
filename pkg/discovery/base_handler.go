@@ -181,9 +181,9 @@ func (b *BaseHandler) WriteCacheEntry(proc *Process) ProcessCacheEntry {
 	return entry
 }
 
-// DefaultPassesFilter implements the common owner-based filtering logic
-// shared by most handlers (all except Java which has extra agent filters).
-func (b *BaseHandler) DefaultPassesFilter(proc *Process, filter ProcessFilter) bool {
+// PassesFilter implements the common owner-based filtering logic
+// shared by most handlers. Java overrides this with extra agent filters.
+func (b *BaseHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
 	if filter.CurrentUserOnly {
 		return proc.Owner == currentUser()
 	}

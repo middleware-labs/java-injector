@@ -111,9 +111,6 @@ func (h *PHPHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *
 	return proc
 }
 
-func (h *PHPHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	return h.DefaultPassesFilter(proc, filter)
-}
 
 func (h *PHPHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	ss := h.BuildServiceSetting(proc)

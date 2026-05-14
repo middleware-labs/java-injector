@@ -94,9 +94,6 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	return proc
 }
 
-func (h *NodeHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	return h.DefaultPassesFilter(proc, filter)
-}
 
 func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	return h.BuildServiceSetting(proc)

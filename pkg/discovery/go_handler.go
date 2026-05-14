@@ -88,9 +88,6 @@ func (h *GoHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *C
 	return proc
 }
 
-func (h *GoHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	return h.DefaultPassesFilter(proc, filter)
-}
 
 func (h *GoHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	return h.BuildServiceSetting(proc)

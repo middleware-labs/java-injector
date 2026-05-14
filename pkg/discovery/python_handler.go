@@ -119,9 +119,6 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 	return proc
 }
 
-func (h *PythonHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	return h.DefaultPassesFilter(proc, filter)
-}
 
 func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	ss := h.BuildServiceSetting(proc)

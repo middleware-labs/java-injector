@@ -86,9 +86,6 @@ func (h *RustHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	return proc
 }
 
-func (h *RustHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	return h.DefaultPassesFilter(proc, filter)
-}
 
 func (h *RustHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	return h.BuildServiceSetting(proc)

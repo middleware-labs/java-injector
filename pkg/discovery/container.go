@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -28,9 +27,6 @@ var (
 	// This survives across different execution cycles of the discovery agent.
 	globalNameCache = make(map[string]containerNameEntry)
 	globalNameMu    sync.RWMutex
-
-	globalCacheHits   atomic.Int64
-	globalCacheMisses atomic.Int64
 )
 
 func getCachedContainerName(id string) (string, bool) {
@@ -39,11 +35,8 @@ func getCachedContainerName(id string) (string, bool) {
 
 	entry, exists := globalNameCache[id]
 	if exists {
-		// Update timestamp to keep it alive (LRU style)
 		entry.LastSeen = time.Now().Unix()
 		globalNameCache[id] = entry
-
-		globalCacheHits.Add(1)
 		return entry.Name, true
 	}
 	return "", false
@@ -75,20 +68,6 @@ func PruneContainerNameCache() {
 			delete(globalNameCache, id)
 		}
 	}
-}
-
-func PrintContainerCacheStats() {
-	hits := globalCacheHits.Load()
-	misses := globalCacheMisses.Load()
-	total := hits + misses
-
-	if total == 0 {
-		return
-	}
-
-	efficiency := float64(hits) / float64(total) * 100
-	fmt.Printf("\n[Container Cache Stats] Hits: %v | Misses: %v | Efficiency: %v\n",
-		hits, misses, efficiency)
 }
 
 // ContainerDetector provides methods to detect if a process is running in a container

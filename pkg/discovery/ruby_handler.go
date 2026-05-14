@@ -93,9 +93,6 @@ func (h *RubyHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	return proc
 }
 
-func (h *RubyHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	return h.DefaultPassesFilter(proc, filter)
-}
 
 func (h *RubyHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	ss := h.BuildServiceSetting(proc)
