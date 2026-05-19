@@ -140,10 +140,13 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 	if err != nil {
 		return &ContainerInfo{IsContainer: false}, err
 	}
+	return parseCgroupContent(string(data)), nil
+}
 
-	content := string(data)
+// parseCgroupContent parses raw cgroup file content to detect container runtimes.
+func parseCgroupContent(content string) *ContainerInfo {
 	if content == "" {
-		return &ContainerInfo{IsContainer: false}, nil
+		return &ContainerInfo{IsContainer: false}
 	}
 
 	// 1. DOCKER & CONTAINERD
@@ -155,7 +158,7 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 			IsContainer: true,
 			ContainerID: matches[1],
 			Runtime:     "docker/containerd",
-		}, nil
+		}
 	}
 
 	// 2. KUBERNETES (CRI-O / Containerd)
@@ -166,7 +169,7 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 			IsContainer: true,
 			ContainerID: matches[1],
 			Runtime:     "kubernetes",
-		}, nil
+		}
 	}
 
 	// 3. PODMAN
@@ -177,7 +180,7 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 			IsContainer: true,
 			ContainerID: matches[1],
 			Runtime:     "podman",
-		}, nil
+		}
 	}
 
 	// 4. LXC
@@ -187,7 +190,7 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 			IsContainer: true,
 			ContainerID: matches[1],
 			Runtime:     "lxc",
-		}, nil
+		}
 	}
 
 	// 5. GENERIC FALLBACK (Systemd Scopes)
@@ -199,10 +202,10 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 		return &ContainerInfo{
 			IsContainer: true,
 			Runtime:     "generic-container",
-		}, nil
+		}
 	}
 
-	return &ContainerInfo{IsContainer: false}, nil
+	return &ContainerInfo{IsContainer: false}
 }
 
 // ClearCache clears the internal container detection cache
