@@ -22,21 +22,17 @@ func (rt *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	return rt.inner.RoundTrip(req)
 }
 
-func newTestDockerClient(ts *httptest.Server) *dockerClient {
+func newTestUnixSocketClient(name string, ts *httptest.Server) unixSocketClient {
 	u, _ := url.Parse(ts.URL)
-	return &dockerClient{httpClient: &http.Client{
-		Transport: &rewriteTransport{target: u, inner: http.DefaultTransport},
-	}}
+	return unixSocketClient{
+		name: name,
+		httpClient: &http.Client{
+			Transport: &rewriteTransport{target: u, inner: http.DefaultTransport},
+		},
+	}
 }
 
-func newTestPodmanClient(ts *httptest.Server) *podmanClient {
-	u, _ := url.Parse(ts.URL)
-	return &podmanClient{httpClient: &http.Client{
-		Transport: &rewriteTransport{target: u, inner: http.DefaultTransport},
-	}}
-}
-
-func TestDockerClientInspect(t *testing.T) {
+func TestUnixSocketClientInspect(t *testing.T) {
 	t.Run("parses standard inspect response", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/containers/abc123/json" {
@@ -44,7 +40,7 @@ func TestDockerClientInspect(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			json.NewEncoder(w).Encode(dockerInspectResponse{
+			json.NewEncoder(w).Encode(containerInspectResponse{
 				ID:   "abc123full",
 				Name: "/billing-api",
 				Config: struct {
@@ -61,7 +57,7 @@ func TestDockerClientInspect(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		meta, err := client.inspect(context.Background(), "abc123")
 		if err != nil {
 			t.Fatalf("inspect error: %v", err)
@@ -89,14 +85,14 @@ func TestDockerClientInspect(t *testing.T) {
 
 	t.Run("name without leading slash", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			json.NewEncoder(w).Encode(dockerInspectResponse{
+			json.NewEncoder(w).Encode(containerInspectResponse{
 				ID:   "def456",
 				Name: "no-slash",
 			})
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		meta, err := client.inspect(context.Background(), "def456")
 		if err != nil {
 			t.Fatalf("inspect error: %v", err)
@@ -108,13 +104,13 @@ func TestDockerClientInspect(t *testing.T) {
 
 	t.Run("image without tag", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			resp := dockerInspectResponse{ID: "img1", Name: "/app"}
+			resp := containerInspectResponse{ID: "img1", Name: "/app"}
 			resp.Config.Image = "nginx"
 			json.NewEncoder(w).Encode(resp)
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		meta, err := client.inspect(context.Background(), "img1")
 		if err != nil {
 			t.Fatalf("inspect error: %v", err)
@@ -129,13 +125,13 @@ func TestDockerClientInspect(t *testing.T) {
 
 	t.Run("no compose labels", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			resp := dockerInspectResponse{ID: "noc1", Name: "/plain"}
+			resp := containerInspectResponse{ID: "noc1", Name: "/plain"}
 			resp.Config.Labels = map[string]string{"other": "label"}
 			json.NewEncoder(w).Encode(resp)
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		meta, err := client.inspect(context.Background(), "noc1")
 		if err != nil {
 			t.Fatalf("inspect error: %v", err)
@@ -151,7 +147,7 @@ func TestDockerClientInspect(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		_, err := client.inspect(context.Background(), "missing")
 		if err == nil {
 			t.Error("expected error on 404 response")
@@ -164,7 +160,7 @@ func TestDockerClientInspect(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		_, err := client.inspect(context.Background(), "bad")
 		if err == nil {
 			t.Error("expected error on malformed JSON")
@@ -172,18 +168,18 @@ func TestDockerClientInspect(t *testing.T) {
 	})
 }
 
-func TestDockerClientInspectBatch(t *testing.T) {
+func TestUnixSocketClientInspectBatch(t *testing.T) {
 	t.Run("returns available containers, skips missing", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/containers/aaa/json":
-				resp := dockerInspectResponse{ID: "aaa", Name: "/app-a"}
+				resp := containerInspectResponse{ID: "aaa", Name: "/app-a"}
 				resp.Config.Image = "img-a:latest"
 				json.NewEncoder(w).Encode(resp)
 			case "/containers/bbb/json":
 				w.WriteHeader(http.StatusNotFound)
 			case "/containers/ccc/json":
-				resp := dockerInspectResponse{ID: "ccc", Name: "/app-c"}
+				resp := containerInspectResponse{ID: "ccc", Name: "/app-c"}
 				resp.Config.Image = "img-c:v2"
 				json.NewEncoder(w).Encode(resp)
 			default:
@@ -192,7 +188,7 @@ func TestDockerClientInspectBatch(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := newTestDockerClient(ts)
+		client := newTestUnixSocketClient("docker", ts)
 		result, err := client.InspectBatch(context.Background(), []string{"aaa", "bbb", "ccc"})
 		if err != nil {
 			t.Fatalf("InspectBatch error: %v", err)
@@ -209,76 +205,30 @@ func TestDockerClientInspectBatch(t *testing.T) {
 	})
 }
 
-func TestPodmanClientInspect(t *testing.T) {
-	t.Run("parses standard inspect response", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			json.NewEncoder(w).Encode(podmanInspectResponse{
-				ID:   "pod123",
-				Name: "/gateway",
-				Config: struct {
-					Image  string            `json:"Image"`
-					Labels map[string]string `json:"Labels"`
-				}{
-					Image:  "quay.io/gateway:3.0",
-					Labels: map[string]string{},
-				},
-			})
-		}))
-		defer ts.Close()
+func TestUnixSocketClientPodmanName(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/containers/pod1/json" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		resp := containerInspectResponse{ID: "pod1", Name: "/gateway"}
+		resp.Config.Image = "quay.io/gateway:3.0"
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
 
-		client := newTestPodmanClient(ts)
-		meta, err := client.inspect(context.Background(), "pod123")
-		if err != nil {
-			t.Fatalf("inspect error: %v", err)
-		}
-		if meta.Name != "gateway" {
-			t.Errorf("Name = %q, want %q", meta.Name, "gateway")
-		}
-		if meta.Image != "quay.io/gateway" {
-			t.Errorf("Image = %q, want %q", meta.Image, "quay.io/gateway")
-		}
-		if meta.ImageTag != "3.0" {
-			t.Errorf("ImageTag = %q, want %q", meta.ImageTag, "3.0")
-		}
-	})
-
-	t.Run("non-200 status returns error", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer ts.Close()
-
-		client := newTestPodmanClient(ts)
-		_, err := client.inspect(context.Background(), "fail")
-		if err == nil {
-			t.Error("expected error on 500 response")
-		}
-	})
-}
-
-func TestPodmanClientInspectBatch(t *testing.T) {
-	t.Run("returns available containers, skips errors", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/containers/p1/json" {
-				resp := podmanInspectResponse{ID: "p1", Name: "/worker"}
-				resp.Config.Image = "worker:latest"
-				json.NewEncoder(w).Encode(resp)
-			} else {
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer ts.Close()
-
-		client := newTestPodmanClient(ts)
-		result, err := client.InspectBatch(context.Background(), []string{"p1", "p2"})
-		if err != nil {
-			t.Fatalf("InspectBatch error: %v", err)
-		}
-		if len(result) != 1 {
-			t.Fatalf("expected 1 result, got %d", len(result))
-		}
-		if result["p1"].Name != "worker" {
-			t.Errorf("p1 Name = %q, want %q", result["p1"].Name, "worker")
-		}
-	})
+	client := newTestUnixSocketClient("podman", ts)
+	result, err := client.InspectBatch(context.Background(), []string{"pod1", "pod2"})
+	if err != nil {
+		t.Fatalf("InspectBatch error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result))
+	}
+	if result["pod1"].Name != "gateway" {
+		t.Errorf("Name = %q, want %q", result["pod1"].Name, "gateway")
+	}
+	if result["pod1"].ImageTag != "3.0" {
+		t.Errorf("ImageTag = %q, want %q", result["pod1"].ImageTag, "3.0")
+	}
 }
