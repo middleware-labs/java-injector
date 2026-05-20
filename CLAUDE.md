@@ -48,7 +48,8 @@ go test -v ./pkg/otelinject -run TestOBI
 - **pkg/discovery/** — Process discovery engine with registry-driven language handlers
   - `discovery.go` — Core pipeline: scan → classify → enrich → filter (worker pool, 10 workers default)
   - `registry.go` — `LanguageHandler` interface + `HandlerRegistry` (first-match-wins)
-  - `java_handler.go` — Java handler: detection, enrichment, filtering, service name helpers
+  - `base_handler.go` — `BaseHandler` with shared `PassesFilter`, `BuildProcess`, `BuildServiceSetting`, `WriteCacheEntry`, `ApplyContainerInfo`
+  - `java_handler.go` — Java handler: detection, enrichment, custom PassesFilter, service name helpers
   - `node_handler.go` — Node.js handler: same pattern + Node-specific lookup tables
   - `python_handler.go` — Python handler: same pattern + PythonAgentType definitions
   - `rust_handler.go` — Rust handler: ELF-based detection (`.comment` section + `lang_start` symbol), hybrid binary rejection
@@ -62,9 +63,9 @@ go test -v ./pkg/otelinject -run TestOBI
   - `report.go` — `ServiceSetting` struct, `GetAgentReportValue()` for backend reporting
   - `cache.go` — Process metadata cache (keyed by PID + create time, 20-min TTL)
   - `container.go` — Container detection via /proc cgroup (Docker, Podman, containerd, LXC, K8s)
-  - `container_client.go` — `ContainerClient` interface, batch resolution, service name application
-  - `container_client_docker.go` — Docker implementation via HTTP over `/var/run/docker.sock`
-  - `container_client_podman.go` — Podman implementation via Docker-compat API
+  - `container_client.go` — `ContainerClient` interface, `unixSocketClient` shared base (inspect, batch resolution), `splitImageTag()`, `extractComposeInfo()`, service name application
+  - `container_client_docker.go` — Docker client: thin wrapper over `unixSocketClient` with `/var/run/docker.sock`
+  - `container_client_podman.go` — Podman client: thin wrapper over `unixSocketClient` with socket discovery
   - `tomcat.go` — Tomcat-specific webapp scanning
   - `ports.go` — Network listener discovery via `/proc/<pid>/fd` + `/proc/<pid>/net/*`
 - **pkg/otelinject/** — OTel injection; primary integration point for mw-agent
@@ -77,20 +78,18 @@ go test -v ./pkg/otelinject -run TestOBI
   - `services_api.go` — Unified `DiscoverServices()` API with fingerprint grouping
   - `dropin.go` — Drop-in file creation/removal at `/etc/systemd/system/{unit}.service.d/`
   - `systemd_api.go` — High-level systemd API: `InstrumentUnit()`, `ListSystemdServices()`, `ReportStatus()`
-  - `injector_java.go` — `JavaSystemdInjector` (OtelInjector for Java)
-  - `injector_node.go` — `NodeSystemdInjector` (OtelInjector for Node)
-  - `injector_python.go` — `PythonSystemdInjector` (OtelInjector for Python)
+  - `injector_base.go` — `baseSystemdInjector` with shared `instrument()`, `uninstrument()`, `instrumentService()` logic
+  - `injector_java.go` — `JavaSystemdInjector` (embeds base, uses `applySystemdDropIn`)
+  - `injector_node.go` — `NodeSystemdInjector` (embeds base, uses `applySystemdDropIn`)
+  - `injector_python.go` — `PythonSystemdInjector` (embeds base, uses `applySystemdDropInPython`, dedup-by-unit)
   - `validate.go` — Agent asset validation + libc flavor detection
 - **pkg/systemd/** — Systemd service management (status, restart, drop-in cleanup)
-- **pkg/agent/** — Java agent installation, validation, and permission management
-- **pkg/config/** — Middleware.io environment variable configuration (~20 MW_* env vars)
-- **pkg/naming/** — Service name generation with sanitization rules
-- **pkg/state/** — JSON-based state persistence for tracking instrumentation
-- **pkg/reporter/** — Backend API reporting client
+- **pkg/javanaming/** — Java-specific service name generation (JAR cleaning, Tomcat instance naming, generic name filtering)
+- **pkg/mwclient/** — Middleware.io backend API client (syncs discovery results to backend)
 
 ### Key Patterns
 
-**Discovery Pipeline:** Registry-driven with `LanguageHandler` interface. Each handler implements Detect → Enrich → PassesFilter → ToServiceSetting. Entry points:
+**Discovery Pipeline:** Registry-driven with `LanguageHandler` interface. Each handler implements Detect → Enrich → ToServiceSetting. `PassesFilter` is provided by `BaseHandler` (owner-based filtering); only Java overrides it with additional agent filters. Entry points:
 - `FindAllProcesses(ctx)` — discovers all supported language processes
 - `FindProcessesByLanguage(ctx, lang)` — discovers processes for a specific language
 
@@ -100,7 +99,7 @@ go test -v ./pkg/otelinject -run TestOBI
 
 **Process Fingerprint:** `Process.Fingerprint()` generates a stable identity hash (SHA256 of exe_path + language-specific args). Ports are deliberately excluded to keep fingerprints stable during app startup (port may not be bound yet). Used as the workload class identity — all replicas of the same app share a fingerprint. Populated in `ServiceSetting.Fingerprint` by all handlers.
 
-**Container Detection:** Cgroup-based runtime detection (`docker/containerd`, `podman`, `kubernetes`, `lxc`). Container names resolved in batch via `ContainerClient` interface (HTTP over Unix socket, no Docker SDK dependency).
+**Container Detection:** Cgroup-based runtime detection (`docker/containerd`, `podman`, `kubernetes`, `lxc`). Container names resolved in batch via `ContainerClient` interface. Docker and Podman clients share a `unixSocketClient` base (HTTP over Unix socket, no Docker SDK dependency) — only constructors and `Available()` differ.
 
 **Service Name Resolution:** Priority-based heuristic chain (first match wins, varies by language):
 
@@ -122,11 +121,9 @@ Rust (rust_handler.go `extractServiceName`):
 
 **Service Lookup:** `findService()` in obi_api.go accepts either service name or fingerprint. Tries name match first; if ambiguous (same name, different fingerprints), requires fingerprint disambiguation.
 
-**Systemd Integration:** Drop-in files created at `/etc/systemd/system/{service}.service.d/middleware-otel.conf` using LD_PRELOAD for Java/Node or LD_PRELOAD + PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX for Python. Only Java, Python, and Node support systemd drop-in instrumentation; other languages (Rust, Go, PHP, Ruby) must use OBI.
+**Systemd Injectors:** `JavaSystemdInjector`, `NodeSystemdInjector`, and `PythonSystemdInjector` all embed `baseSystemdInjector` which provides shared `instrument()`, `uninstrument()`, and `instrumentService()` logic. The base is parameterized by an apply function (`applySystemdDropIn` for Java/Node, `applySystemdDropInPython` for Python) and a `dedupByUnit` flag (Python only, to prevent cascading restarts for multi-process apps like Gunicorn). Drop-in files are created at `/etc/systemd/system/{service}.service.d/middleware-otel.conf`. Only Java, Python, and Node support systemd drop-in instrumentation; other languages (Rust, Go, PHP, Ruby) must use OBI.
 
 **OBI Integration:** Selectors added to `/etc/obi-agent/config.yaml` under `discovery.instrument[]`. YAML round-tripped via `yaml.Node` to preserve comments and unrelated sections. OBI agent restarted via systemctl after config changes. OBI uses OTel semconv language names (`nodejs`, not `node`); the `obiLanguageMap` in `obi_strategy.go` handles the translation from internal language constants.
-
-**State Persistence:** JSON files at `/etc/middleware/state/` track instrumented services to enable clean uninstrumentation.
 
 ### Key Data Structures
 
@@ -137,7 +134,8 @@ Rust (rust_handler.go `extractServiceName`):
 - `InstrumentationStrategy` (pkg/otelinject/strategy.go) — Interface for pluggable instrumentation methods
 - `OBISelector` (pkg/otelinject/obiconfig.go) — OBI YAML selector (name, open_ports, exe_path, cmd_args, languages, containers_only)
 - `ContainerClient` (pkg/discovery/container_client.go) — Interface for container runtime APIs (Docker, Podman)
-- `ProcessConfiguration` (pkg/config/config.go) — Middleware.io env var configuration
+- `unixSocketClient` (pkg/discovery/container_client.go) — Shared HTTP-over-Unix-socket implementation for Docker/Podman
+- `baseSystemdInjector` (pkg/otelinject/injector_base.go) — Shared systemd instrumentation logic for all language injectors
 - `DiscoveryOptions` (pkg/discovery/discovery.go) — Controls concurrency, timeout, filtering
 
 ### Default Paths
@@ -145,8 +143,6 @@ Rust (rust_handler.go `extractServiceName`):
 | Component | Path |
 |-----------|------|
 | Java Agent | `/opt/middleware/agents/middleware-javaagent-1.8.1.jar` |
-| State Files | `/etc/middleware/state/` |
-| Config Files | `/etc/middleware/services/` |
 | Systemd Drop-ins | `/etc/systemd/system/{unit}.service.d/middleware-otel.conf` |
 | OBI Config | `/etc/obi-agent/config.yaml` |
 | OBI Binary | `/usr/local/bin/obi` |
@@ -155,8 +151,7 @@ Rust (rust_handler.go `extractServiceName`):
 
 - **New language:** Implement `LanguageHandler` in `pkg/discovery/{lang}_handler.go`, add `Lang{Name}` constant in `types.go`, add `Language{Name}` constant in `pkg/otelinject/interfaces.go`, register in `NewHandlerRegistry()`, add language mapping in `obiLanguageMap` in `obi_strategy.go`, and add to `resolveLanguage()` in mw-agent's `main.go`. For native-compiled languages (like Rust), detection requires ELF inspection and the handler must fall back to `/proc/<pid>/exe` for containerized processes whose readlinked path doesn't exist on the host. See `rust_handler.go` as reference.
 - **New instrumentation method:** Implement `InstrumentationStrategy` in `pkg/otelinject/{method}_strategy.go`, register in `NewStrategyRegistry()`.
-- **New container runtime:** Implement `ContainerClient` in `pkg/discovery/container_client_{runtime}.go`, add to `initContainerClients()`.
-- **New config field:** Extend `ProcessConfiguration` in `pkg/config/config.go`
+- **New container runtime:** Embed `unixSocketClient` in `pkg/discovery/container_client_{runtime}.go` (if Docker-compat API) or implement `ContainerClient` from scratch, add to `initContainerClients()`.
 
 ## Ideas / TODO
 

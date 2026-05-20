@@ -101,15 +101,15 @@ func (p *Process) IsServerless() bool {
 
 // --- Private helpers ---
 
-func extractMWAgentVersion(agentPath string) string {
-	versionPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`-(\d+\.\d+\.\d+)`),
-		regexp.MustCompile(`_(\d+\.\d+\.\d+)`),
-		regexp.MustCompile(`(\d+\.\d+\.\d+)\.jar`),
-		regexp.MustCompile(`v(\d+\.\d+\.\d+)`),
-	}
+var mwAgentVersionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`-(\d+\.\d+\.\d+)`),
+	regexp.MustCompile(`_(\d+\.\d+\.\d+)`),
+	regexp.MustCompile(`(\d+\.\d+\.\d+)\.jar`),
+	regexp.MustCompile(`v(\d+\.\d+\.\d+)`),
+}
 
-	for _, pattern := range versionPatterns {
+func extractMWAgentVersion(agentPath string) string {
+	for _, pattern := range mwAgentVersionPatterns {
 		matches := pattern.FindStringSubmatch(agentPath)
 		if len(matches) > 1 {
 			return matches[1]

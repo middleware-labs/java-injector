@@ -15,7 +15,26 @@ import (
 // NodeHandler implements LanguageHandler for Node.js processes.
 // It detects Node/npm/yarn processes, enriches them with entry point,
 // package info, process manager details, and instrumentation state.
-type NodeHandler struct{}
+type NodeHandler struct{ BaseHandler }
+
+func NewNodeHandler() *NodeHandler {
+	return &NodeHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:                       LangNode,
+		RuntimeName:                    "node",
+		RuntimeDescription:             "Node.js Runtime",
+		OverrideServiceNameOnContainer: true,
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailEntryPoint, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+			{DetailProcessManager, func(c ProcessCacheEntry) any { return c.ServiceType }},
+			{DetailIsPM2, func(c ProcessCacheEntry) any { return c.ServiceType == "pm2" }},
+			{DetailIsForever, func(c ProcessCacheEntry) any { return c.ServiceType == "forever" }},
+			{DetailPackageName, func(c ProcessCacheEntry) any { return c.PackageName }},
+		},
+		ExtraCacheWriter: func(proc *Process, entry *ProcessCacheEntry) {
+			entry.PackageName = proc.DetailString(DetailPackageName)
+		},
+	}}}
+}
 
 // Lang returns LangNode.
 func (h *NodeHandler) Lang() Language { return LangNode }
@@ -38,50 +57,15 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	createTime := readProcessCreateTime(pid)
 	alignedTime := (createTime / 1000) * 1000
 
-	// Cache fast path
 	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
 		if cached.Ignore {
 			return nil
 		}
-
-		status := readProcessStatus(pid)
-
-		return &Process{
-			PID:            pid,
-			ParentPID:      readProcessPPID(pid),
-			ExecutableName: info.ExeName,
-			ExecutablePath: info.ExePath,
-			Command:        info.CmdLine,
-			CommandLine:    info.CmdLine,
-			Owner:          cached.Owner,
-			CreateTime:     timeFromMillis(createTime),
-			Status:         status,
-			Language:       LangNode,
-
-			ServiceName:        cached.ServiceName,
-			RuntimeName:        "node",
-			RuntimeVersion:     cached.RuntimeVersion,
-			RuntimeDescription: "Node.js Runtime",
-
-			HasAgent:          cached.HasAgent,
-			IsMiddlewareAgent: cached.IsMiddlewareAgent,
-			AgentPath:         cached.AgentPath,
-			ContainerInfo:     cached.ContainerInfo,
-
-			Details: map[string]any{
-				DetailEntryPoint:          cached.EntryPoint,
-				DetailProcessManager:      cached.ServiceType,
-				DetailIsPM2:               cached.ServiceType == "pm2",
-				DetailIsForever:           cached.ServiceType == "forever",
-				DetailSystemdUnit:         cached.SystemdUnit,
-				DetailExplicitServiceName: cached.ExplicitServiceName,
-				DetailWorkingDirectory:    cached.WorkingDirectory,
-				DetailPackageName:         cached.PackageName,
-			},
-		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
-	// Slow path
 	if isIgnoredSystemdUnit(pid) {
 		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
 		return nil
@@ -92,38 +76,10 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 		return nil
 	}
 
-	status := readProcessStatus(pid)
+	proc := h.BuildProcess(info, owner, createTime, "unknown")
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		Command:        info.CmdLine,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    cmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangNode,
-
-		RuntimeName:        "node",
-		RuntimeVersion:     "unknown",
-		RuntimeDescription: "Node.js Runtime",
-
-		Details: make(map[string]any),
-	}
-
-	// Container detection
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
 	h.extractNodeInfo(proc, cmdArgs)
@@ -132,77 +88,26 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	h.detectProcessManager(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
 
-	// Populate cache
-	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:         proc.ServiceName,
-		ServiceType:         proc.DetailString(DetailProcessManager),
-		RuntimeVersion:      proc.RuntimeVersion,
-		EntryPoint:          proc.DetailString(DetailEntryPoint),
-		HasAgent:            proc.HasAgent,
-		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
-		AgentPath:           proc.AgentPath,
-		ContainerInfo:       proc.ContainerInfo,
-		Owner:               proc.Owner,
-		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
-		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
-		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
-		PackageName:         proc.DetailString(DetailPackageName),
-	})
+	CacheProcessMetadata(pid, alignedTime, h.WriteCacheEntry(proc))
 
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
-// PassesFilter checks simple owner-based filtering for Node processes.
-func (h *NodeHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return proc.Owner == currentUser()
-	}
-	return true
+
+func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
+	return h.BuildServiceSetting(proc)
 }
 
-// ToServiceSetting converts a Node Process into a ServiceSetting for
-// backend reporting.
-func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
-	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
-	serviceType := "system"
-	if isSystemd {
-		serviceType = "systemd"
+func (h *NodeHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if pkg := proc.DetailString(DetailPackageName); pkg != "" && pkg != "unknown" {
+		parts = append(parts, pkg)
 	}
-
-	serviceName := proc.ServiceName
-
-	// Handle Container Infrastructure
-	if proc.IsInContainer() {
-		serviceType = "docker" //should be "container" - TODO: change this
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("container-node-%s", proc.ContainerInfo.ContainerID[:12])
-			serviceName = proc.ContainerInfo.ContainerName
-		}
+	if ep := proc.DetailString(DetailEntryPoint); ep != "" {
+		parts = append(parts, ep)
 	}
-
-	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
-
-	return &ServiceSetting{
-		PID:               proc.PID,
-		ServiceName:       serviceName,
-		Owner:             proc.Owner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       serviceType,
-		Language:          "node",
-		RuntimeVersion:    proc.RuntimeVersion,
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-		Key:               key,
-		SystemdUnit:       unitname,
-		Listeners:         proc.Listeners(),
-		Fingerprint:       proc.Fingerprint(),
-		IntegrationType:   proc.IntegrationType(),
-	}
+	return parts
 }
 
 // --- Private helpers ---

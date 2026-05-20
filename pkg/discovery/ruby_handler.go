@@ -8,7 +8,20 @@ import (
 )
 
 // RubyHandler implements LanguageHandler for Ruby processes.
-type RubyHandler struct{}
+type RubyHandler struct{ BaseHandler }
+
+func NewRubyHandler() *RubyHandler {
+	return &RubyHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:                       LangRuby,
+		RuntimeName:                    "ruby",
+		RuntimeDescription:             "Ruby Interpreter",
+		OverrideServiceNameOnContainer: true,
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailEntryPoint, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+			{DetailProcessManager, func(c ProcessCacheEntry) any { return c.ServiceType }},
+		},
+	}}}
+}
 
 func (h *RubyHandler) Lang() Language { return LangRuby }
 
@@ -52,38 +65,9 @@ func (h *RubyHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 		if cached.Ignore {
 			return nil
 		}
-
-		status := readProcessStatus(pid)
-
-		return &Process{
-			PID:            pid,
-			ParentPID:      readProcessPPID(pid),
-			ExecutableName: info.ExeName,
-			ExecutablePath: info.ExePath,
-			CommandLine:    info.CmdLine,
-			Owner:          cached.Owner,
-			CreateTime:     timeFromMillis(createTime),
-			Status:         status,
-			Language:       LangRuby,
-
-			ServiceName:        cached.ServiceName,
-			RuntimeName:        "ruby",
-			RuntimeVersion:     cached.RuntimeVersion,
-			RuntimeDescription: "Ruby Interpreter",
-
-			HasAgent:          cached.HasAgent,
-			IsMiddlewareAgent: cached.IsMiddlewareAgent,
-			AgentPath:         cached.AgentPath,
-			ContainerInfo:     cached.ContainerInfo,
-
-			Details: map[string]any{
-				DetailEntryPoint:          cached.EntryPoint,
-				DetailProcessManager:      cached.ServiceType,
-				DetailSystemdUnit:         cached.SystemdUnit,
-				DetailExplicitServiceName: cached.ExplicitServiceName,
-				DetailWorkingDirectory:    cached.WorkingDirectory,
-			},
-		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
 	if isIgnoredSystemdUnit(pid) {
@@ -91,35 +75,10 @@ func (h *RubyHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 		return nil
 	}
 
-	status := readProcessStatus(pid)
+	proc := h.BuildProcess(info, owner, createTime, "")
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    cmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangRuby,
-
-		RuntimeName:        "ruby",
-		RuntimeDescription: "Ruby Interpreter",
-
-		Details: make(map[string]any),
-	}
-
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
 	h.extractRubyInfo(proc, cmdArgs)
@@ -128,72 +87,26 @@ func (h *RubyHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	h.detectProcessManager(proc, cmdArgs)
 	h.detectInstrumentation(proc)
 
-	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:         proc.ServiceName,
-		ServiceType:         proc.DetailString(DetailProcessManager),
-		RuntimeVersion:      proc.RuntimeVersion,
-		EntryPoint:          proc.DetailString(DetailEntryPoint),
-		HasAgent:            proc.HasAgent,
-		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
-		AgentPath:           proc.AgentPath,
-		ContainerInfo:       proc.ContainerInfo,
-		Owner:               proc.Owner,
-		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
-		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
-		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
-	})
+	CacheProcessMetadata(pid, alignedTime, h.WriteCacheEntry(proc))
 
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
-func (h *RubyHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return proc.Owner == currentUser()
-	}
-	return true
-}
 
 func (h *RubyHandler) ToServiceSetting(proc *Process) *ServiceSetting {
-	key := fmt.Sprintf("host-ruby-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
-	serviceType := "system"
-	if isSystemd {
-		serviceType = "systemd"
+	ss := h.BuildServiceSetting(proc)
+	ss.ProcessManager = proc.DetailString(DetailProcessManager)
+	return ss
+}
+
+func (h *RubyHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if ep := proc.DetailString(DetailEntryPoint); ep != "" {
+		parts = append(parts, ep)
 	}
-
-	serviceName := proc.ServiceName
-
-	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("container-ruby-%s", proc.ContainerInfo.ContainerID[:12])
-			serviceName = proc.ContainerInfo.ContainerName
-		}
-	}
-
-	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
-
-	return &ServiceSetting{
-		PID:               proc.PID,
-		ServiceName:       serviceName,
-		Owner:             proc.Owner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       serviceType,
-		Language:          "ruby",
-		RuntimeVersion:    proc.RuntimeVersion,
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-		Key:               key,
-		ProcessManager:    proc.DetailString(DetailProcessManager),
-		SystemdUnit:       unitname,
-		Listeners:         proc.Listeners(),
-		Fingerprint:       proc.Fingerprint(),
-		IntegrationType:   proc.IntegrationType(),
-	}
+	parts = append(parts, proc.ExecutablePath)
+	return parts
 }
 
 // --- Private helpers ---

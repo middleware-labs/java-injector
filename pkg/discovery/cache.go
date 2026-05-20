@@ -72,7 +72,7 @@ func CacheProcessMetadata(pid int32, createTime int64, entry ProcessCacheEntry) 
 	globalProcessCache.data[key] = entry
 }
 
-// PruneProcessCache deletes anything older than 30 minutes
+// PruneProcessCache deletes anything older than 20 minutes
 func PruneProcessCache() {
 	globalProcessCache.mu.Lock()
 	defer globalProcessCache.mu.Unlock()

@@ -34,7 +34,7 @@ func TestRustHandlerDetect(t *testing.T) {
 		},
 	}
 
-	h := &RustHandler{}
+	h := NewRustHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &ProcessInfo{
@@ -68,7 +68,7 @@ func TestRustHandlerDetectRealBinary(t *testing.T) {
 		t.Skipf("rustc compilation failed: %v\n%s", err, out)
 	}
 
-	h := &RustHandler{}
+	h := NewRustHandler()
 	proc := &ProcessInfo{
 		PID:     99999,
 		ExeName: "hello",
@@ -107,7 +107,7 @@ func TestRustHandlerDetectStrippedBinary(t *testing.T) {
 		t.Skipf("strip failed: %v\n%s", err, out)
 	}
 
-	h := &RustHandler{}
+	h := NewRustHandler()
 	proc := &ProcessInfo{
 		PID:     99999,
 		ExeName: "stripped",
@@ -145,7 +145,7 @@ func TestRustHandlerExtractServiceName(t *testing.T) {
 		},
 	}
 
-	h := &RustHandler{}
+	h := NewRustHandler()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			proc := &Process{
@@ -170,7 +170,7 @@ func TestRustHandlerExtractServiceName(t *testing.T) {
 }
 
 func TestRustHandlerLang(t *testing.T) {
-	h := &RustHandler{}
+	h := NewRustHandler()
 	if h.Lang() != LangRust {
 		t.Errorf("Lang() = %q, want %q", h.Lang(), LangRust)
 	}

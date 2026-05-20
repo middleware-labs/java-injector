@@ -118,20 +118,11 @@ func (s *OBIStrategy) Uninstrument(service discovery.ServiceSetting) error {
 	return s.restartOBI()
 }
 
-var obiLanguageMap = map[discovery.Language]string{
-	discovery.LangJava:   "java",
-	discovery.LangNode:   "nodejs",
-	discovery.LangPython: "python",
-	discovery.LangGo:     "go",
-	discovery.LangRust:   "rust",
-	discovery.LangRuby:   "ruby",
-	discovery.LangPHP:    "php",
-}
-
 func buildOBISelector(service discovery.ServiceSetting, lang discovery.Language) OBISelector {
 	obiLang := string(lang)
-	if mapped, ok := obiLanguageMap[lang]; ok {
-		obiLang = mapped
+	meta, ok := languageMeta[lang]
+	if ok && meta.OBISemconvName != "" {
+		obiLang = meta.OBISemconvName
 	}
 
 	sel := OBISelector{
@@ -143,7 +134,6 @@ func buildOBISelector(service discovery.ServiceSetting, lang discovery.Language)
 		sel.ContainersOnly = true
 	}
 
-	// Build port list from listeners
 	if len(service.Listeners) > 0 {
 		var b strings.Builder
 		for i, l := range service.Listeners {
@@ -155,14 +145,8 @@ func buildOBISelector(service discovery.ServiceSetting, lang discovery.Language)
 		sel.OpenPorts = b.String()
 	}
 
-	// Add cmd_args for disambiguation when available
-	switch lang {
-	case discovery.LangJava:
-		if service.JarFile != "" {
-			sel.CmdArgs = "*" + service.JarFile + "*"
-		} else if service.MainClass != "" {
-			sel.CmdArgs = "*" + service.MainClass + "*"
-		}
+	if ok && meta.CustomizeOBISelector != nil {
+		meta.CustomizeOBISelector(&sel, service)
 	}
 
 	return sel

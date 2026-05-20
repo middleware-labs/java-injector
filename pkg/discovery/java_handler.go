@@ -16,7 +16,20 @@ import (
 // It detects JVM processes, enriches them with JVM options, JAR info,
 // Tomcat deployment, and instrumentation details, and converts them
 // to ServiceSettings for reporting.
-type JavaHandler struct{}
+type JavaHandler struct{ BaseHandler }
+
+func NewJavaHandler() *JavaHandler {
+	return &JavaHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:           LangJava,
+		RuntimeName:        "java",
+		RuntimeDescription: "Java Virtual Machine",
+		DefaultServiceType: "standalone",
+		ContainerKeyPrefix: "docker",
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailJarFile, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+		},
+	}}}
+}
 
 // Lang returns LangJava.
 func (h *JavaHandler) Lang() Language { return LangJava }
@@ -53,8 +66,13 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	createTime := readProcessCreateTime(pid)
 	alignedTime := (createTime / 1000) * 1000
 
-	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit && cached.Ignore {
-		return nil
+	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
+		if cached.Ignore {
+			return nil
+		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
 	if isIgnoredSystemdUnit(pid) {
@@ -62,38 +80,10 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 		return nil
 	}
 
-	status := readProcessStatus(pid)
+	proc := h.BuildProcess(info, owner, createTime, extractJavaVersionFromArgs(cmdArgs))
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		Command:        info.CmdLine,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    cmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangJava,
-
-		RuntimeName:        "java",
-		RuntimeVersion:     extractJavaVersionFromArgs(cmdArgs),
-		RuntimeDescription: "Java Virtual Machine",
-
-		Details: make(map[string]any),
-	}
-
-	// Container detection
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
 	h.extractJavaInfo(proc, cmdArgs)
@@ -102,6 +92,11 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 	h.detectTomcat(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
 
+	entry := h.WriteCacheEntry(proc)
+	entry.EntryPoint = proc.DetailString(DetailJarFile)
+	CacheProcessMetadata(pid, alignedTime, entry)
+
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
@@ -151,43 +146,21 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		return nil
 	}
 
-	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	ss := h.BuildServiceSetting(proc)
+	ss.JarFile = proc.DetailString(DetailJarFile)
+	ss.MainClass = proc.DetailString(DetailMainClass)
+	return ss
+}
 
-	deploymentType := "standalone"
-	if proc.IsInContainer() {
-		deploymentType = "docker"
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("docker-java-%s", proc.ContainerInfo.ContainerID[:12])
-		}
-	} else if isSystemd {
-		deploymentType = "systemd"
+func (h *JavaHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if jar := proc.DetailString(DetailJarFile); jar != "" {
+		parts = append(parts, stripJarVersion(jar))
 	}
-
-	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
-
-	return &ServiceSetting{
-		PID:               proc.PID,
-		ServiceName:       proc.ServiceName,
-		Owner:             proc.Owner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       deploymentType,
-		Language:          "java",
-		RuntimeVersion:    proc.RuntimeVersion,
-		JarFile:           proc.DetailString(DetailJarFile),
-		MainClass:         proc.DetailString(DetailMainClass),
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-		Key:               key,
-		SystemdUnit:       unitname,
-		Listeners:         proc.Listeners(),
-		Fingerprint:       proc.Fingerprint(),
-		IntegrationType:   proc.IntegrationType(),
+	if mc := proc.DetailString(DetailMainClass); mc != "" {
+		parts = append(parts, mc)
 	}
+	return parts
 }
 
 // --- Private helpers ---
@@ -391,6 +364,8 @@ func extractFromJavaSystemProperties(cmdArgs []string) string {
 	return ""
 }
 
+var camelCaseSplitter = regexp.MustCompile(`([a-z])([A-Z])`)
+
 var jarVersionPatterns = []struct {
 	re  *regexp.Regexp
 	rep string
@@ -441,8 +416,7 @@ func extractNameFromMainClass(mainClass string) string {
 		className = strings.TrimSuffix(className, s)
 	}
 
-	re := regexp.MustCompile(`([a-z])([A-Z])`)
-	className = re.ReplaceAllString(className, "${1}-${2}")
+	className = camelCaseSplitter.ReplaceAllString(className, "${1}-${2}")
 
 	return cleanName(className)
 }

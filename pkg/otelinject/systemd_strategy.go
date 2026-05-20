@@ -32,8 +32,8 @@ func (s *SystemdDropinStrategy) CanHandle(service discovery.ServiceSetting) bool
 	if service.SystemdUnit == "" {
 		return false
 	}
-	lang := discovery.Language(service.Language)
-	return lang == discovery.LangJava || lang == discovery.LangNode || lang == discovery.LangPython
+	meta, ok := languageMeta[discovery.Language(service.Language)]
+	return ok && meta.SupportsSystemdDropin
 }
 
 // ValidateAssets checks that required agent files are present for the given
@@ -42,26 +42,11 @@ func (s *SystemdDropinStrategy) CanHandle(service discovery.ServiceSetting) bool
 //   - Node: register.js + node_modules + libotelinject.so
 //   - Python: sitecustomize.py + opentelemetry libs + libotelinject.so
 func (s *SystemdDropinStrategy) ValidateAssets(lang discovery.Language, baseDir string) error {
-	switch lang {
-	case discovery.LangJava:
-		status := ValidateJavaAgent(baseDir)
-		if !status.Ready {
-			return fmt.Errorf("java agent not ready: %v", status.Errors)
-		}
-	case discovery.LangNode:
-		status := ValidateNodeAgent(baseDir)
-		if !status.Ready {
-			return fmt.Errorf("node agent not ready: %v", status.Errors)
-		}
-	case discovery.LangPython:
-		status := ValidatePythonAgent(baseDir)
-		if !status.Ready {
-			return fmt.Errorf("python agent not ready: %v", status.Errors)
-		}
-	default:
+	meta, ok := languageMeta[lang]
+	if !ok || !meta.SupportsSystemdDropin || meta.ValidateAgent == nil {
 		return fmt.Errorf("unsupported language: %s", lang)
 	}
-	return nil
+	return meta.ValidateAgent(baseDir)
 }
 
 // Instrument creates a systemd drop-in file for the service's unit and
@@ -73,18 +58,17 @@ func (s *SystemdDropinStrategy) Instrument(service discovery.ServiceSetting, lan
 		return fmt.Errorf("service %q has no systemd unit", service.ServiceName)
 	}
 
+	meta, ok := languageMeta[lang]
+	if !ok || !meta.SupportsSystemdDropin || meta.InstrumentDropin == nil {
+		return fmt.Errorf("unsupported language for systemd drop-in: %s", lang)
+	}
+
 	dropIn, err := NewSystemdDropin(unitName)
 	if err != nil {
 		return fmt.Errorf("failed to create systemd dropin for %s: %w", unitName, err)
 	}
 
-	switch lang {
-	case discovery.LangPython:
-		return dropIn.applySystemdDropInPython()
-	default:
-		// Java and Node both use the same LD_PRELOAD-based dropin.
-		return dropIn.applySystemdDropIn()
-	}
+	return meta.InstrumentDropin(dropIn)
 }
 
 // Uninstrument removes the systemd drop-in file for the service's unit

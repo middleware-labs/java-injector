@@ -6,7 +6,7 @@ import (
 )
 
 func TestGoHandler_Detect(t *testing.T) {
-	h := &GoHandler{}
+	h := NewGoHandler()
 
 	// The test binary itself is a Go binary — use our own PID so
 	// Detect reads /proc/self/exe which points to the test binary.
@@ -35,7 +35,7 @@ func TestGoHandler_Detect(t *testing.T) {
 }
 
 func TestGoHandler_Detect_IgnoredBinaries(t *testing.T) {
-	h := &GoHandler{}
+	h := NewGoHandler()
 
 	for _, name := range []string{"dockerd", "kubelet", "mw-agent", "obi-agent", "gopls"} {
 		proc := &ProcessInfo{
@@ -87,7 +87,7 @@ func TestIsIgnoredGoBinary(t *testing.T) {
 }
 
 func TestGoHandler_ExtractServiceName(t *testing.T) {
-	h := &GoHandler{}
+	h := NewGoHandler()
 
 	tests := []struct {
 		name    string
