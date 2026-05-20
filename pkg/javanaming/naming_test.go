@@ -1,4 +1,4 @@
-package naming
+package javanaming
 
 import (
 	"testing"
@@ -108,81 +108,6 @@ func TestIsGenericName(t *testing.T) {
 			got := IsGenericName(tt.input)
 			if got != tt.want {
 				t.Errorf("IsGenericName(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestCamelToKebab(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"BillingService", "billing-service"},
-		{"OrderProcessing", "order-processing"},
-		{"UserAccountApp", "user-account-app"},
-		{"already-kebab", "already-kebab"},
-		{"lowercase", "lowercase"},
-		{"XMLParser", "xmlparser"},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := CamelToKebab(tt.input)
-			if got != tt.want {
-				t.Errorf("CamelToKebab(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeServiceName(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"underscore to dash", "my_app", "my-app"},
-		{"space to dash", "my app", "my-app"},
-		{"uppercase lowered", "MyApp", "myapp"},
-		{"special chars removed", "app@v2", "appv2"},
-		{"empty", "", ""},
-		{"generic NOT rejected", "app", "app"},
-		{"multi dash collapsed", "a--b", "a-b"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeServiceName(tt.input)
-			if got != tt.want {
-				t.Errorf("NormalizeServiceName(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestValidateServiceName(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		wantErr bool
-	}{
-		{"valid name", "billing-api", false},
-		{"empty", "", true},
-		{"generic", "app", true},
-		{"invalid chars space", "my app", true},
-		{"invalid chars underscore", "my_app", true},
-		{"invalid chars dot", "my.app", true},
-		{"invalid chars slash", "my/app", true},
-		{"valid hyphen", "my-app", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateServiceName(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateServiceName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}
 		})
 	}

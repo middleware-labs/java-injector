@@ -13,7 +13,19 @@ import (
 )
 
 // GoHandler implements LanguageHandler for Go processes.
-type GoHandler struct{}
+type GoHandler struct{ BaseHandler }
+
+func NewGoHandler() *GoHandler {
+	return &GoHandler{BaseHandler: BaseHandler{Config: HandlerConfig{
+		Language:                       LangGo,
+		RuntimeName:                    "go",
+		RuntimeDescription:             "Go Runtime",
+		OverrideServiceNameOnContainer: true,
+		CacheDetailMapping: []CacheDetailMap{
+			{DetailGoModule, func(c ProcessCacheEntry) any { return c.EntryPoint }},
+		},
+	}}}
+}
 
 // Lang returns LangGo.
 func (h *GoHandler) Lang() Language { return LangGo }
@@ -47,38 +59,9 @@ func (h *GoHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *C
 		if cached.Ignore {
 			return nil
 		}
-
-		status := readProcessStatus(pid)
-
-		return &Process{
-			PID:            pid,
-			ParentPID:      readProcessPPID(pid),
-			ExecutableName: info.ExeName,
-			ExecutablePath: info.ExePath,
-			Command:        info.CmdLine,
-			CommandLine:    info.CmdLine,
-			Owner:          cached.Owner,
-			CreateTime:     timeFromMillis(createTime),
-			Status:         status,
-			Language:       LangGo,
-
-			ServiceName:        cached.ServiceName,
-			RuntimeName:        "go",
-			RuntimeVersion:     cached.RuntimeVersion,
-			RuntimeDescription: "Go Runtime",
-
-			HasAgent:          cached.HasAgent,
-			IsMiddlewareAgent: cached.IsMiddlewareAgent,
-			AgentPath:         cached.AgentPath,
-			ContainerInfo:     cached.ContainerInfo,
-
-			Details: map[string]any{
-				DetailGoModule:            cached.EntryPoint,
-				DetailWorkingDirectory:    cached.WorkingDirectory,
-				DetailSystemdUnit:         cached.SystemdUnit,
-				DetailExplicitServiceName: cached.ExplicitServiceName,
-			},
-		}
+		proc := h.BuildProcessFromCache(info, cached, createTime)
+		SetFingerprintFunc(proc, h.FingerprintParts)
+		return proc
 	}
 
 	if isIgnoredSystemdUnit(pid) {
@@ -86,37 +69,10 @@ func (h *GoHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *C
 		return nil
 	}
 
-	status := readProcessStatus(pid)
+	proc := h.BuildProcess(info, owner, createTime, "unknown")
 
-	proc := &Process{
-		PID:            pid,
-		ParentPID:      readProcessPPID(pid),
-		ExecutableName: info.ExeName,
-		ExecutablePath: info.ExePath,
-		Command:        info.CmdLine,
-		CommandLine:    info.CmdLine,
-		CommandArgs:    info.CmdArgs,
-		Owner:          owner,
-		CreateTime:     timeFromMillis(createTime),
-		Status:         status,
-		Language:       LangGo,
-
-		RuntimeName:        "go",
-		RuntimeVersion:     "unknown",
-		RuntimeDescription: "Go Runtime",
-
-		Details: make(map[string]any),
-	}
-
-	if opts.IncludeContainerInfo || opts.ExcludeContainers {
-		containerInfo, err := detector.IsProcessInContainer(pid)
-		if err == nil {
-			proc.ContainerInfo = containerInfo
-
-			if opts.ExcludeContainers && containerInfo.IsContainer {
-				return nil
-			}
-		}
+	if h.ApplyContainerInfo(proc, opts, detector) {
+		return nil
 	}
 
 	h.extractGoInfo(proc, info)
@@ -124,73 +80,26 @@ func (h *GoHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *C
 	h.extractServiceName(proc)
 	h.detectInstrumentation(proc)
 
-	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:         proc.ServiceName,
-		ServiceType:         proc.DetailString(DetailProcessManager),
-		RuntimeVersion:      proc.RuntimeVersion,
-		EntryPoint:          proc.DetailString(DetailGoModule),
-		HasAgent:            proc.HasAgent,
-		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
-		AgentPath:           proc.AgentPath,
-		ContainerInfo:       proc.ContainerInfo,
-		Owner:               proc.Owner,
-		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
-		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
-		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
-	})
+	entry := h.WriteCacheEntry(proc)
+	entry.EntryPoint = proc.DetailString(DetailGoModule)
+	CacheProcessMetadata(pid, alignedTime, entry)
 
+	SetFingerprintFunc(proc, h.FingerprintParts)
 	return proc
 }
 
-// PassesFilter checks owner-based filtering for Go processes.
-func (h *GoHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return proc.Owner == currentUser()
-	}
-	return true
+
+func (h *GoHandler) ToServiceSetting(proc *Process) *ServiceSetting {
+	return h.BuildServiceSetting(proc)
 }
 
-// ToServiceSetting converts a Go Process into a ServiceSetting for backend reporting.
-func (h *GoHandler) ToServiceSetting(proc *Process) *ServiceSetting {
-	key := fmt.Sprintf("host-go-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.PID)
-	serviceType := "system"
-	if isSystemd {
-		serviceType = "systemd"
+func (h *GoHandler) FingerprintParts(proc *Process) []string {
+	var parts []string
+	if mod := proc.DetailString(DetailGoModule); mod != "" {
+		parts = append(parts, mod)
 	}
-
-	serviceName := proc.ServiceName
-
-	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
-			key = fmt.Sprintf("container-go-%s", proc.ContainerInfo.ContainerID[:12])
-			serviceName = proc.ContainerInfo.ContainerName
-		}
-	}
-
-	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
-
-	return &ServiceSetting{
-		PID:               proc.PID,
-		ServiceName:       serviceName,
-		Owner:             proc.Owner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       serviceType,
-		Language:          "go",
-		RuntimeVersion:    proc.RuntimeVersion,
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.AgentPath,
-		Instrumented:      proc.HasAgent,
-		Key:               key,
-		SystemdUnit:       unitname,
-		Listeners:         proc.Listeners(),
-		Fingerprint:       proc.Fingerprint(),
-		IntegrationType:   proc.IntegrationType(),
-	}
+	parts = append(parts, proc.ExecutablePath)
+	return parts
 }
 
 // --- Private helpers ---

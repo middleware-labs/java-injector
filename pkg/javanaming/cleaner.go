@@ -1,4 +1,4 @@
-package naming
+package javanaming
 
 import (
 	"path/filepath"
@@ -67,12 +67,6 @@ func CleanJarName(jar string) string {
 	return CleanServiceName(name)
 }
 
-// CleanWebappName cleans webapp names
-// Moved from main.go: cleanWebappName()
-func CleanWebappName(name string) string {
-	return CleanJarName(name)
-}
-
 // IsGenericName checks if a service name is too generic
 // Moved from main.go: isGenericServiceName()
 func IsGenericName(name string) bool {
@@ -91,40 +85,3 @@ func IsGenericName(name string) bool {
 	return false
 }
 
-// CamelToKebab converts CamelCase to kebab-case
-// This is a utility that can be used by discovery package if needed
-func CamelToKebab(s string) string {
-	// Insert hyphens before uppercase letters (except the first character)
-	reg := regexp.MustCompile(`([a-z])([A-Z])`)
-	s = reg.ReplaceAllString(s, "${1}-${2}")
-
-	return strings.ToLower(s)
-}
-
-// NormalizeServiceName normalizes a service name according to common conventions
-// This provides a standard normalization that other packages can use
-func NormalizeServiceName(name string) string {
-	if name == "" {
-		return ""
-	}
-
-	// Convert to lowercase
-	name = strings.ToLower(name)
-
-	// Replace underscores and spaces with hyphens
-	name = strings.ReplaceAll(name, "_", "-")
-	name = strings.ReplaceAll(name, " ", "-")
-
-	// Remove invalid characters (keep only alphanumeric and hyphens)
-	reg := regexp.MustCompile(`[^a-z0-9\-]+`)
-	name = reg.ReplaceAllString(name, "")
-
-	// Remove leading/trailing hyphens
-	name = strings.Trim(name, "-")
-
-	// Collapse multiple consecutive hyphens
-	reg = regexp.MustCompile(`-+`)
-	name = reg.ReplaceAllString(name, "-")
-
-	return name
-}
