@@ -1,0 +1,11 @@
+[Unit]
+Description=Test Python Application
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/python3 3600
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

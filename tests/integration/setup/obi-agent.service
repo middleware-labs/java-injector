@@ -1,0 +1,10 @@
+[Unit]
+Description=Fake OBI Agent
+
+[Service]
+Type=simple
+ExecStart=/bin/sleep infinity
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
