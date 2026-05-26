@@ -90,9 +90,9 @@ func TestGoHandler_ExtractServiceName(t *testing.T) {
 	h := NewGoHandler()
 
 	tests := []struct {
-		name    string
-		proc    *Process
-		want    string
+		name string
+		proc *Process
+		want string
 	}{
 		{
 			name: "exe name used as service name",

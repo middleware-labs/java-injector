@@ -1,0 +1,8 @@
+# OBI Agent Configuration
+# This seed config is used by integration tests to verify round-trip preservation.
+otel_traces_exporter: otlp
+target_url: http://localhost:9319
+
+discovery:
+  # Poll interval for process discovery
+  poll_interval: 5s

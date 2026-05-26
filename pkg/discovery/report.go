@@ -220,8 +220,12 @@ func parseCgroupUnitName(pid int32) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	return parseCgroupUnitContent(string(data))
+}
 
-	for _, line := range strings.Split(string(data), "\n") {
+// parseCgroupUnitContent parses raw cgroup file content to extract the systemd unit name.
+func parseCgroupUnitContent(content string) (string, bool) {
+	for _, line := range strings.Split(content, "\n") {
 		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
 			continue
 		}
