@@ -6,9 +6,11 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -50,11 +52,30 @@ type ServiceSetting struct {
 	Instances           []ReportInstanceInfo `json:"instances,omitempty"`
 }
 
+// IntegrationInstanceInfo holds per-PID details for a detected integration instance.
+type IntegrationInstanceInfo struct {
+	PID    int32  `json:"pid"`
+	Owner  string `json:"owner"`
+	Status string `json:"status"`
+	Ports  []int  `json:"ports,omitempty"`
+}
+
+// IntegrationSetting represents a detected infrastructure integration
+// (Redis, MySQL, PostgreSQL, etc.) reported to the backend.
+type IntegrationSetting struct {
+	IntegrationType string                    `json:"integration_type"`
+	ServiceName     string                    `json:"service_name"`
+	ServiceType     string                    `json:"service_type"`
+	Ports           []int                     `json:"ports,omitempty"`
+	Instances       []IntegrationInstanceInfo  `json:"instances,omitempty"`
+}
+
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").
 type OSConfig struct {
-	AgentRestartStatus          bool                      `json:"agent_restart_status"`
-	AutoInstrumentationInit     bool                      `json:"auto_instrumentation_init"`
-	AutoInstrumentationSettings map[string]ServiceSetting `json:"auto_instrumentation_settings"`
+	AgentRestartStatus          bool                             `json:"agent_restart_status"`
+	AutoInstrumentationInit     bool                             `json:"auto_instrumentation_init"`
+	AutoInstrumentationSettings map[string]ServiceSetting        `json:"auto_instrumentation_settings"`
+	Integrations                []IntegrationSetting             `json:"integrations,omitempty"`
 }
 
 // AgentReportValue is the root structure for the 'value' field's JSON content.
@@ -128,12 +149,35 @@ func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error
 		}
 	}
 
+	// Discover infrastructure integrations (Redis, MySQL, etc.) that are not
+	// language-classified processes.
+	skipPIDs := make(map[int32]struct{})
+	for _, procs := range allProcs {
+		for _, proc := range procs {
+			skipPIDs[proc.PID] = struct{}{}
+		}
+	}
+
+	log.Printf("discovering infrastructure integrations (skipping %d language-classified PIDs)", len(skipPIDs))
+	integrationProcs, integrationErr := d.DiscoverIntegrations(ctx, skipPIDs)
+	if integrationErr != nil {
+		log.Printf("warning: integration discovery failed: %v", integrationErr)
+		if discoverErrs == nil {
+			discoverErrs = integrationErr
+		}
+	} else {
+		log.Printf("integration discovery found %d processes", len(integrationProcs))
+	}
+
+	integrations := buildIntegrationSettings(integrationProcs)
+
 	osKey := runtime.GOOS
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
 			AgentRestartStatus:          false,
 			AutoInstrumentationInit:     true,
 			AutoInstrumentationSettings: settings,
+			Integrations:                integrations,
 		},
 	}
 
@@ -165,6 +209,82 @@ func ApplyStoredInstrumentThis(
 		}
 		result[k] = current
 	}
+	return result
+}
+
+func buildIntegrationSettings(procs []*Process) []IntegrationSetting {
+	if len(procs) == 0 {
+		return nil
+	}
+
+	type group struct {
+		integrationType string
+		serviceName     string
+		serviceType     string
+		ports           map[int]struct{}
+		instances       []IntegrationInstanceInfo
+	}
+
+	groups := make(map[string]*group)
+	var order []string
+
+	for _, proc := range procs {
+		itype := proc.IntegrationType()
+		if itype == "" {
+			continue
+		}
+
+		g, exists := groups[itype]
+		if !exists {
+			serviceType := "standalone"
+			if unit, _ := parseCgroupUnitName(proc.PID); unit != "" {
+				serviceType = "systemd"
+			} else if proc.IsInContainer() {
+				serviceType = "docker"
+			}
+			g = &group{
+				integrationType: itype,
+				serviceName:     proc.ServiceName,
+				serviceType:     serviceType,
+				ports:           make(map[int]struct{}),
+			}
+			groups[itype] = g
+			order = append(order, itype)
+		}
+
+		inst := IntegrationInstanceInfo{
+			PID:    proc.PID,
+			Owner:  proc.Owner,
+			Status: proc.Status,
+		}
+		for _, l := range proc.Listeners() {
+			p := int(l.Port)
+			inst.Ports = append(inst.Ports, p)
+			g.ports[p] = struct{}{}
+		}
+		sort.Ints(inst.Ports)
+		g.instances = append(g.instances, inst)
+	}
+
+	result := make([]IntegrationSetting, 0, len(groups))
+	for _, key := range order {
+		g := groups[key]
+		ports := make([]int, 0, len(g.ports))
+		for p := range g.ports {
+			ports = append(ports, p)
+		}
+		sort.Ints(ports)
+		result = append(result, IntegrationSetting{
+			IntegrationType: g.integrationType,
+			ServiceName:     g.serviceName,
+			ServiceType:     g.serviceType,
+			Ports:           ports,
+			Instances:       g.instances,
+		})
+		log.Printf("integration detected: type=%s service=%s serviceType=%s ports=%v instances=%d",
+			g.integrationType, g.serviceName, g.serviceType, ports, len(g.instances))
+	}
+	log.Printf("built %d integration settings for report", len(result))
 	return result
 }
 
