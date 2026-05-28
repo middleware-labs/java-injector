@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func TestE2E_Registry_SystemdRouting(t *testing.T) {

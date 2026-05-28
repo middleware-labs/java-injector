@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"runtime"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 // Reporter orchestrates the full discovery → merge → send cycle.

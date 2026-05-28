@@ -3,7 +3,7 @@ package otelinject
 import (
 	"testing"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func TestBuildInstancesFromSetting(t *testing.T) {

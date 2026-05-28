@@ -1,4 +1,4 @@
-module github.com/middleware-labs/java-injector
+module github.com/middleware-labs/mw-injector
 
 go 1.24.2
 

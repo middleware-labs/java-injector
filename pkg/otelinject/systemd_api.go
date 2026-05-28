@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"runtime"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
-	"github.com/middleware-labs/java-injector/pkg/mwclient"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/mwclient"
 )
 
 func ReportStatus(

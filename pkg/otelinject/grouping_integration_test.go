@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 // groupSettingsForTest replays the grouping logic from DiscoverServices

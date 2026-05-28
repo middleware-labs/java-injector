@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func TestMain(m *testing.M) {

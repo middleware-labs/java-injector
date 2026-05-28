@@ -3,7 +3,7 @@ package javanaming
 import (
 	"testing"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func TestCleanServiceName(t *testing.T) {

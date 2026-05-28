@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"sort"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 // ServiceEntry represents a discovered workload class, potentially with

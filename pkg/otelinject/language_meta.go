@@ -3,7 +3,7 @@ package otelinject
 import (
 	"fmt"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 // LanguageMeta holds per-language configuration for instrumentation strategies.

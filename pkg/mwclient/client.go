@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 const apiPath = "api/v1/agent/public/setting/"

@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func TestE2E_FindAllProcesses(t *testing.T) {

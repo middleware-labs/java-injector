@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
-	"github.com/middleware-labs/java-injector/pkg/javanaming"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/javanaming"
 )
 
 // GetServiceName tries to find the actual systemd service name for a Java process

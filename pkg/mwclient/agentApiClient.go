@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func newClient(cfg ClientConfig) (AgentAPIClient, error) {

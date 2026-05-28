@@ -3,7 +3,7 @@
 // with mw-agent which imports otelinject.LanguageJava etc.
 package otelinject
 
-import "github.com/middleware-labs/java-injector/pkg/discovery"
+import "github.com/middleware-labs/mw-injector/pkg/discovery"
 
 // Language is an alias for discovery.Language so that mw-agent can continue
 // using otelinject.Language without breaking. Because this is a type alias (=),

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func TestDefaultDiscoveryOptions(t *testing.T) {

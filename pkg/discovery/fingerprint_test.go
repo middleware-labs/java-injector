@@ -3,7 +3,7 @@ package discovery_test
 import (
 	"testing"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 func makeProcess(lang discovery.Language, details map[string]any) *discovery.Process {

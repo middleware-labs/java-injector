@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 // InstrumentOBI instruments a service via OBI by adding an OBI selector to the

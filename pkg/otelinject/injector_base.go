@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 type applyFunc func(*SystemdDropin) error

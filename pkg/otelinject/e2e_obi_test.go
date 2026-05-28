@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/middleware-labs/java-injector/pkg/discovery"
+	"github.com/middleware-labs/mw-injector/pkg/discovery"
 )
 
 const obiConfigPath = "/etc/obi-agent/config.yaml"
